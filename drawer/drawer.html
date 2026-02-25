@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ouroboros</title>
+  <link rel="stylesheet" href="../styles/shared.css">
+  <link rel="stylesheet" href="drawer.css">
+</head>
+<body>
+  <div id="ouroboros-app">
+
+    <!-- Header -->
+    <header class="drawer-header">
+      <div class="drawer-logo">
+        <svg class="logo-snake" width="24" height="24" viewBox="0 0 100 100" fill="none">
+          <circle cx="50" cy="50" r="36" stroke="#b4ff64" stroke-width="8"
+            stroke-dasharray="185 40" stroke-linecap="round"/>
+          <polygon points="79,44 91,50 79,56" fill="#b4ff64" transform="rotate(48,85,50)"/>
+        </svg>
+        <span class="drawer-title">ouroboros</span>
+      </div>
+      <div class="drawer-header-actions">
+        <span class="platform-badge" id="platform-badge">—</span>
+        <button class="icon-btn" id="btn-settings" title="Settings" aria-label="Settings">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
+          </svg>
+        </button>
+        <button class="icon-btn" id="btn-close" title="Close" aria-label="Close drawer">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Tab Navigation -->
+    <nav class="drawer-tabs" id="drawer-tabs">
+      <button class="tab-btn active" data-tab="optimize">Optimize</button>
+      <button class="tab-btn" data-tab="library">Library</button>
+      <button class="tab-btn" data-tab="settings">Settings</button>
+    </nav>
+
+    <!-- Views -->
+    <main class="drawer-content">
+
+      <!-- OPTIMIZE VIEW -->
+      <section class="tab-view active" id="view-optimize">
+        <!-- Provenance flag — shown only for pasted/auto-populated content -->
+        <div class="provenance-flag hidden" id="provenance-flag">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <span id="provenance-text">Contains pasted content — review before sending</span>
+        </div>
+
+        <!-- Prompt preview -->
+        <div class="prompt-preview" id="prompt-preview">
+          <div class="preview-label">Current prompt</div>
+          <div class="preview-text" id="preview-text">Focus a text field on the page to begin.</div>
+        </div>
+
+        <!-- Optimize button -->
+        <button class="optimize-btn" id="btn-optimize" disabled>
+          <svg class="btn-icon spin-on-load" width="14" height="14" viewBox="0 0 100 100" fill="none">
+            <circle cx="50" cy="50" r="36" stroke="currentColor" stroke-width="10"
+              stroke-dasharray="185 40" stroke-linecap="round"/>
+          </svg>
+          <span id="btn-optimize-label">Improve prompt</span>
+        </button>
+
+        <!-- Result area — hidden until result arrives -->
+        <div class="result-area hidden" id="result-area">
+
+          <!-- Complexity badge -->
+          <div class="result-meta" id="result-meta">
+            <span class="complexity-badge" id="complexity-badge">—</span>
+            <span class="changes-count" id="changes-count"></span>
+          </div>
+
+          <!-- Tab switcher: improved / diff / edit -->
+          <div class="result-tabs">
+            <button class="result-tab active" data-result-tab="improved">Improved</button>
+            <button class="result-tab" data-result-tab="diff">Diff</button>
+            <button class="result-tab" data-result-tab="edit">Edit</button>
+          </div>
+
+          <!-- Improved view -->
+          <div class="result-view active" id="rv-improved">
+            <div class="result-text" id="improved-text"></div>
+          </div>
+
+          <!-- Diff view -->
+          <div class="result-view" id="rv-diff">
+            <div class="result-text" id="diff-text"></div>
+          </div>
+
+          <!-- Edit view -->
+          <div class="result-view" id="rv-edit">
+            <textarea class="edit-textarea" id="edit-textarea" spellcheck="true"></textarea>
+          </div>
+
+          <!-- Changes list -->
+          <ul class="changes-list" id="changes-list"></ul>
+
+          <!-- Reasoning -->
+          <div class="reasoning" id="reasoning-text"></div>
+
+          <!-- Approval gate -->
+          <div class="approval-gate">
+            <button class="approve-btn primary" id="btn-apply">
+              ✓ Use this
+            </button>
+            <button class="approve-btn secondary" id="btn-use-original">
+              Use original
+            </button>
+            <button class="approve-btn ghost" id="btn-save">
+              Save to library
+            </button>
+          </div>
+
+        </div>
+
+        <!-- Empty state -->
+        <div class="empty-state" id="empty-state">
+          <div class="empty-icon">
+            <svg width="32" height="32" viewBox="0 0 100 100" fill="none" opacity="0.2">
+              <circle cx="50" cy="50" r="36" stroke="#b4ff64" stroke-width="8"
+                stroke-dasharray="185 40" stroke-linecap="round"/>
+              <polygon points="79,44 91,50 79,56" fill="#b4ff64" transform="rotate(48,85,50)"/>
+            </svg>
+          </div>
+          <p>Click inside any text field<br>on the page to begin.</p>
+        </div>
+      </section>
+
+      <!-- LIBRARY VIEW -->
+      <section class="tab-view" id="view-library">
+        <div class="library-header">
+          <input type="search" class="library-search" id="library-search" placeholder="Search saved prompts...">
+        </div>
+        <div class="library-list" id="library-list">
+          <div class="empty-state">
+            <p>No saved prompts yet.<br>Approve an optimization and save it.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- SETTINGS VIEW -->
+      <section class="tab-view" id="view-settings">
+        <div class="settings-content" id="settings-content">
+          <!-- Populated by drawer.js -->
+        </div>
+        <div class="donation-section" id="donation-section">
+          <p class="donation-text">Ouroboros is free. If it saves you time, consider supporting it.</p>
+          <div class="donation-btns">
+            <a href="https://paypal.me/ouroboros" target="_blank" class="donation-btn">PayPal</a>
+            <a href="https://donate.stripe.com/ouroboros" target="_blank" class="donation-btn">Card</a>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+  </div>
+
+  <script src="drawer.js" type="module"></script>
+</body>
+</html>

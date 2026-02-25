@@ -1,0 +1,13 @@
+# No node_modules yet but good practice
+node_modules/
+
+# OS clutter
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Keep wasm placeholder but ignore future model files
+wasm/*.bin
+wasm/*.onnx
+wasm/*.wasm
+!wasm/.gitkeep

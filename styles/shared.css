@@ -1,0 +1,73 @@
+/* Ouroboros — Shared Design Tokens */
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@700;800&display=swap');
+
+:root {
+  /* Colors */
+  --color-bg:          #0a0a0a;
+  --color-bg-raised:   #0d0d0d;
+  --color-bg-elevated: #111111;
+  --color-border:      #1a1a1a;
+  --color-border-mid:  #222222;
+
+  --color-text:        #e8e8e0;
+  --color-text-muted:  #888888;
+  --color-text-dim:    #444444;
+  --color-text-ghost:  #2a2a2a;
+
+  --color-accent:      #b4ff64;
+  --color-accent-dim:  rgba(180, 255, 100, 0.15);
+  --color-accent-dark: #0d1a0a;
+
+  --color-success:     #4ade80;
+  --color-warning:     #facc15;
+  --color-error:       #f87171;
+
+  /* Typography */
+  --font-mono:    'IBM Plex Mono', 'Courier New', monospace;
+  --font-display: 'Syne', sans-serif;
+
+  --text-xs:   10px;
+  --text-sm:   12px;
+  --text-base: 13px;
+  --text-md:   14px;
+
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  /* Transitions */
+  --transition: 0.15s ease;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-mono);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: var(--text-base);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-border-mid); border-radius: 2px; }
+
+/* Utility */
+.hidden { display: none !important; }

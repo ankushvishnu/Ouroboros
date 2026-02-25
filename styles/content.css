@@ -1,0 +1,54 @@
+/* Ouroboros — Content Styles
+   Injected into every page for the trigger button and drawer iframe */
+
+#ouroboros-trigger {
+  position: absolute;
+  z-index: 2147483646;
+  width: 32px;
+  height: 32px;
+  background: #0a0a0a;
+  border: 1px solid #1e1e1e;
+  border-radius: 50%;
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: border-color 0.15s, transform 0.15s;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+#ouroboros-trigger:hover {
+  border-color: #b4ff64;
+  transform: scale(1.1);
+}
+
+#ouroboros-trigger.ouroboros-trigger-active {
+  border-color: #b4ff64;
+  background: #0d1a0a;
+}
+
+/* Drawer root container */
+#ouroboros-drawer-root {
+  position: fixed;
+  top: 0;
+  right: -340px;
+  width: 340px;
+  height: 100vh;
+  z-index: 2147483647;
+  transition: right 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.5);
+}
+
+#ouroboros-drawer-root.ouroboros-drawer-open {
+  right: 0;
+}
+
+/* Drawer iframe */
+#ouroboros-drawer-frame {
+  width: 100%;
+  height: 100%;
+  border: none;
+  border-left: 1px solid #1a1a1a;
+  background: #0a0a0a;
+}
