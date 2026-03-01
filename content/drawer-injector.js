@@ -106,6 +106,12 @@
         break;
       }
 
+      case 'OUROBOROS_RESET_PAGE': {
+        if (drawerOpen) toggleDrawer();
+        setTimeout(() => window.location.reload(), 300);
+        break;
+      }
+
       case 'OUROBOROS_GET_PROMPT': {
         const prompt = window.__ouroborosInterceptor?.getActivePrompt() || '';
         const provenance = window.__ouroborosInterceptor?.getProvenance() || 'typed';
