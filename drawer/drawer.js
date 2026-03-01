@@ -1,8 +1,9 @@
-// Ouroboros — Drawer Orchestrator
-// Manages all drawer state, views, and communication with background
+// Ouroboros — Drawer Orchestrator v2
+// Usage meter, hard block UI, copy/paste protection, license-aware rendering
 
 import { diffWords } from '../core/diff.js';
 import { getConfig, saveConfig, savePromptToLibrary, getPromptLibrary, incrementPromptUse, deletePrompt } from '../core/storage.js';
+import { maskImprovedPrompt } from '../core/usage.js';
 
 // ── State ─────────────────────────────────────────────────────────────────
 let state = {
@@ -14,29 +15,68 @@ let state = {
   currentResultTab: 'improved',
   config: null,
   startTime: null,
+  // Usage / license state (fetched on init)
+  isTrial: false,
+  todayUsage: 0,
+  dailyLimit: 5,
+  launched: false,
+  licenseStatus: null,
+  // Whether this result has been accepted already (prevents double-count)
+  resultAccepted: false,
 };
 
-// ── DOM refs ──────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
 
 // ── Init ──────────────────────────────────────────────────────────────────
 async function init() {
   state.config = await getConfig();
+  await refreshStatus();
   setupTabs();
   setupResultTabs();
   setupButtons();
   setupLibrary();
   setupSettings();
   renderSettings();
+  renderUsageMeter();
+  startResetCountdown();
 
-  // Tell parent page we're ready and want context
   window.parent.postMessage({ type: 'OUROBOROS_GET_PROMPT' }, '*');
+}
+
+// ── Paywall reset countdown ───────────────────────────────────────────────
+function startResetCountdown() {
+  function update() {
+    const el = $('paywall-reset-time');
+    if (!el) return;
+    const now = new Date();
+    const midnight = new Date();
+    midnight.setHours(24, 0, 0, 0);
+    const diff = midnight - now;
+    const h = Math.floor(diff / 3600000);
+    const m = Math.floor((diff % 3600000) / 60000);
+    el.textContent = `${h}h ${m}m`;
+  }
+  update();
+  setInterval(update, 60000);
+}
+
+// ── Fetch current usage / license status from background ─────────────────
+async function refreshStatus() {
+  try {
+    const status = await chrome.runtime.sendMessage({ type: 'GET_STATUS' });
+    state.isTrial    = status.isTrial;
+    state.todayUsage = status.todayUsage || 0;
+    state.dailyLimit = status.dailyLimit || 5;
+    state.launched   = status.launched;
+    state.licenseStatus = status.licenseStatus;
+  } catch (e) {
+    console.warn('[Ouroboros] Could not fetch status:', e.message);
+  }
 }
 
 // ── Message bridge (iframe ↔ content script) ──────────────────────────────
 window.addEventListener('message', (e) => {
   if (!e.data?.type?.startsWith('OUROBOROS_')) return;
-
   switch (e.data.type) {
     case 'OUROBOROS_CONTEXT': {
       const { prompt, provenance, platform } = e.data.payload;
@@ -51,12 +91,11 @@ function updateContext(prompt, provenance, platform) {
   state.provenance = provenance;
   state.platform = platform;
   state.result = null;
+  state.resultAccepted = false;
 
-  // Platform badge
   const badge = $('platform-badge');
   if (badge) badge.textContent = platform !== 'generic' ? platform : '—';
 
-  // Provenance flag
   const flag = $('provenance-flag');
   const flagText = $('provenance-text');
   if (flag && flagText) {
@@ -70,44 +109,98 @@ function updateContext(prompt, provenance, platform) {
     }
   }
 
-  // Preview
   const previewText = $('preview-text');
   if (previewText) {
     previewText.textContent = prompt || 'Focus a text field on the page to begin.';
   }
 
-  // Enable/disable optimize button
   const btn = $('btn-optimize');
   if (btn) {
     btn.disabled = !prompt || !prompt.trim() || !state.config?.configured;
   }
 
-  // Reset result area
   hideResult();
+  hidePaywall();
+}
+
+// ── Usage meter ───────────────────────────────────────────────────────────
+function renderUsageMeter() {
+  const meter = $('usage-meter');
+  if (!meter) return;
+
+  // Licensed users: show beta badge instead of meter
+  if (!state.isTrial) {
+    if (state.licenseStatus?.valid) {
+      meter.innerHTML = `
+        <span class="usage-badge usage-badge-beta">
+          ✦ Beta — unlimited
+        </span>`;
+    } else if (!state.launched) {
+      meter.innerHTML = `
+        <span class="usage-badge usage-badge-beta">
+          ✦ Open beta
+        </span>`;
+    } else {
+      meter.innerHTML = '';
+    }
+    return;
+  }
+
+  const used  = state.todayUsage;
+  const limit = state.dailyLimit;
+  const left  = Math.max(0, limit - used);
+  const pct   = Math.min(100, (used / limit) * 100);
+
+  const color = left === 0   ? 'var(--color-error)'
+              : left === 1   ? 'var(--color-warning)'
+              : 'var(--color-accent)';
+
+  meter.innerHTML = `
+    <div class="usage-row">
+      <span class="usage-label">${left === 0 ? 'Daily limit reached' : `${left} improvement${left !== 1 ? 's' : ''} left today`}</span>
+      <span class="usage-count" style="color:${color}">${used} / ${limit}</span>
+    </div>
+    <div class="usage-track">
+      <div class="usage-fill" style="width:${pct}%; background:${color}"></div>
+    </div>`;
+}
+
+// ── Paywall ───────────────────────────────────────────────────────────────
+function showPaywall() {
+  const pw = $('paywall');
+  if (pw) pw.classList.remove('hidden');
+  $('result-area')?.classList.add('hidden');
+  $('btn-optimize')?.setAttribute('disabled', 'true');
+}
+
+function hidePaywall() {
+  $('paywall')?.classList.add('hidden');
 }
 
 // ── Optimize ──────────────────────────────────────────────────────────────
 async function optimize() {
   if (!state.prompt?.trim() || state.loading) return;
 
-  state.loading = true;
-  state.startTime = Date.now();
-  setOptimizeButtonLoading(true);
-  hideResult();
+  // Refresh status before each optimization
+  await refreshStatus();
 
-  // Before sending message, check context is still valid
-  if (!chrome.runtime?.id) {
-    showError('Extension was updated — please reload this page.');
+  // Hard block if limit reached
+  if (state.isTrial && state.todayUsage >= state.dailyLimit) {
+    showPaywall();
     return;
   }
+
+  state.loading = true;
+  state.startTime = Date.now();
+  state.resultAccepted = false;
+  setOptimizeButtonLoading(true);
+  hideResult();
+  hidePaywall();
 
   try {
     const response = await chrome.runtime.sendMessage({
       type: 'OPTIMIZE_PROMPT',
-      payload: {
-        prompt: state.prompt,
-        provenance: state.provenance,
-      },
+      payload: { prompt: state.prompt, provenance: state.provenance },
     });
 
     if (response.error === 'NOT_CONFIGURED') {
@@ -115,11 +208,26 @@ async function optimize() {
       return;
     }
 
+    if (response.error === 'DAILY_LIMIT_REACHED') {
+      state.todayUsage = state.dailyLimit;
+      renderUsageMeter();
+      showPaywall();
+      return;
+    }
+
     if (response.error) throw new Error(response.error);
 
     state.result = response.result;
+
+    // Update local usage state from result
+    if (response.result.usageAfterThis !== null) {
+      // usageAfterThis is what it WILL be after accept — show current
+      state.todayUsage = Math.max(0, response.result.usageAfterThis - 1);
+    }
+
     renderResult(state.result);
     showResult();
+    renderUsageMeter();
 
   } catch (err) {
     console.error('[Ouroboros] Optimize error:', err);
@@ -132,16 +240,15 @@ async function optimize() {
 
 // ── Render result ─────────────────────────────────────────────────────────
 function renderResult(result) {
-  // Complexity badge
-  const badge = $('complexity-badge');
   const colors = { none: '#4ade80', low: '#a3e635', medium: '#facc15', high: '#f97316', unknown: '#888' };
+
+  const badge = $('complexity-badge');
   if (badge) {
     badge.textContent = result.complexity || 'unknown';
     badge.style.color = colors[result.complexity] || '#888';
-    badge.style.borderColor = `${colors[result.complexity]}44` || '#88844';
+    badge.style.borderColor = `${colors[result.complexity]}44`;
   }
 
-  // Changes count
   const count = $('changes-count');
   if (count) {
     count.textContent = result.changes?.length
@@ -149,25 +256,56 @@ function renderResult(result) {
       : 'no changes';
   }
 
-  // Improved text
-  const improved = $('improved-text');
-  if (improved) improved.textContent = result.improved || result.original;
+  // If trial and this would be the last use — show masked version
+  const isLastUse = state.isTrial && (state.todayUsage + 1 >= state.dailyLimit);
+  const improvedText = result.improved || result.original;
 
-  // Diff
+  // Improved view
+  const improved = $('improved-text');
+  if (improved) {
+    if (isLastUse) {
+      // Last free use — show full text but disable copy
+      improved.textContent = improvedText;
+      improved.style.userSelect = 'none';
+      improved.style.webkitUserSelect = 'none';
+      improved.addEventListener('copy', (e) => e.preventDefault(), { once: false });
+      improved.addEventListener('contextmenu', (e) => e.preventDefault(), { once: false });
+    } else {
+      improved.textContent = improvedText;
+      improved.style.userSelect = '';
+      improved.style.webkitUserSelect = '';
+    }
+  }
+
+  // Diff view — never masked (structural info only, not copyable prompt)
   const diffEl = $('diff-text');
   if (diffEl) {
-    const tokens = diffWords(result.original, result.improved);
+    const tokens = diffWords(result.original, improvedText);
     diffEl.innerHTML = tokens.map(token => {
       const cls = token.type === 'add' ? 'diff-add'
         : token.type === 'remove' ? 'diff-remove'
         : 'diff-same';
       return `<span class="${cls}">${escapeHtml(token.text)}</span>`;
     }).join('');
+    if (isLastUse) {
+      diffEl.style.userSelect = 'none';
+      diffEl.style.webkitUserSelect = 'none';
+    }
   }
 
-  // Edit textarea
+  // Edit view — disabled on last free use
   const editArea = $('edit-textarea');
-  if (editArea) editArea.value = result.improved || result.original;
+  if (editArea) {
+    editArea.value = improvedText;
+    editArea.readOnly = isLastUse;
+    if (isLastUse) {
+      editArea.style.opacity = '0.5';
+      editArea.title = 'Editing disabled on last free use — upgrade for full access';
+    } else {
+      editArea.style.opacity = '';
+      editArea.title = '';
+    }
+  }
 
   // Changes list
   const changesList = $('changes-list');
@@ -194,14 +332,22 @@ function renderResult(result) {
   // Apply button label
   const applyBtn = $('btn-apply');
   if (applyBtn) {
-    applyBtn.textContent = result.changes?.length === 0
-      ? '✓ Send as-is'
-      : '✓ Use this';
+    applyBtn.textContent = result.changes?.length === 0 ? '✓ Send as-is' : '✓ Use this';
+  }
+
+  // Show last-use warning if applicable
+  const lastUseWarning = $('last-use-warning');
+  if (lastUseWarning) {
+    if (isLastUse) {
+      lastUseWarning.classList.remove('hidden');
+    } else {
+      lastUseWarning.classList.add('hidden');
+    }
   }
 }
 
 // ── Approval actions ──────────────────────────────────────────────────────
-function applyPrompt(useOriginal = false) {
+async function applyPrompt(useOriginal = false) {
   const promptToApply = useOriginal
     ? state.result?.original
     : state.currentResultTab === 'edit'
@@ -210,25 +356,53 @@ function applyPrompt(useOriginal = false) {
 
   if (!promptToApply) return;
 
-  // Send to parent page
+  // Prevent double-counting if user clicks "Use this" twice
+  if (!useOriginal && !state.resultAccepted) {
+    state.resultAccepted = true;
+
+    // Tell background to increment usage count
+    const countResponse = await chrome.runtime.sendMessage({
+      type: 'ACCEPT_IMPROVEMENT',
+      payload: {
+        complexity: state.result?.complexity,
+        provenance: state.provenance,
+        originalLength: state.result?.original?.length || 0,
+        improvedLength: promptToApply.length,
+        timeToDecision: state.startTime ? Date.now() - state.startTime : 0,
+        inferenceLayer: state.result?.inferenceLayer || 'cloud',
+      }
+    });
+
+    // Update local count and re-render meter
+    if (countResponse?.newCount !== null && countResponse?.newCount !== undefined) {
+      state.todayUsage = countResponse.newCount;
+    }
+
+    renderUsageMeter();
+
+    // If this was the last free use, show paywall after applying
+    if (state.isTrial && state.todayUsage >= state.dailyLimit) {
+      setTimeout(showPaywall, 300);
+    }
+  }
+
   window.parent.postMessage({
     type: 'OUROBOROS_APPLY_PROMPT',
     payload: { prompt: promptToApply }
   }, '*');
 
-  // Log the decision
-  const timeToDecision = state.startTime ? Date.now() - state.startTime : 0;
+  // Also log for analytics (non-counting)
   chrome.runtime.sendMessage({
     type: 'LOG_EVENT',
     payload: {
-      type: 'prompt_approved',
+      type: useOriginal ? 'prompt_original_used' : 'prompt_accepted',
       action: useOriginal ? 'approved_original' : 'approved_optimized',
       originalLength: state.result?.original?.length || 0,
       improvedLength: promptToApply.length,
       complexity: state.result?.complexity,
       provenance: state.provenance,
       inferenceLayer: state.result?.inferenceLayer || 'cloud',
-      timeToDecision,
+      timeToDecision: state.startTime ? Date.now() - state.startTime : 0,
     }
   });
 }
@@ -236,14 +410,13 @@ function applyPrompt(useOriginal = false) {
 async function saveToLibrary() {
   if (!state.result) return;
 
-  const entry = await savePromptToLibrary({
+  await savePromptToLibrary({
     original: state.result.original,
     improved: state.result.improved,
     changes: state.result.changes,
     complexity: state.result.complexity,
   });
 
-  // Visual feedback
   const btn = $('btn-save');
   if (btn) {
     btn.textContent = '✓ Saved';
@@ -254,7 +427,6 @@ async function saveToLibrary() {
     }, 2000);
   }
 
-  // Refresh library if it's visible
   await renderLibrary();
 }
 
@@ -262,12 +434,6 @@ async function saveToLibrary() {
 async function renderLibrary(filter = '') {
   const list = $('library-list');
   if (!list) return;
-
-  // Guard — chrome may not be available if context invalidated
-  if (typeof chrome === 'undefined' || !chrome.storage) {
-    list.innerHTML = `<div class="empty-state"><p>Reload the page to reconnect.</p></div>`;
-    return;
-  }
 
   const prompts = await getPromptLibrary();
   const filtered = filter
@@ -300,7 +466,6 @@ async function renderLibrary(filter = '') {
     </div>
   `).join('');
 
-  // Attach events
   list.querySelectorAll('[data-action]').forEach(btn => {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -327,9 +492,7 @@ async function renderLibrary(filter = '') {
 
 function setupLibrary() {
   const search = $('library-search');
-  if (search) {
-    search.addEventListener('input', () => renderLibrary(search.value));
-  }
+  if (search) search.addEventListener('input', () => renderLibrary(search.value));
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────
@@ -337,79 +500,53 @@ function renderSettings() {
   const container = $('settings-content');
   if (!container || !state.config) return;
 
+  const licenseInfo = state.licenseStatus?.valid
+    ? `<div class="settings-license-badge">✦ Beta — unlimited until ${new Date(state.licenseStatus.validUntil).toLocaleDateString()}</div>`
+    : state.isTrial
+      ? `<div class="settings-license-free">${state.todayUsage} / ${state.dailyLimit} used today · <a href="https://papercargo.com/ouroboros#pricing" target="_blank">Upgrade →</a></div>`
+      : '';
+
   container.innerHTML = `
-  <div class="settings-section">
-    <label class="settings-toggle-row">
-      <span>Auto-analyze as I type</span>
-      <input type="checkbox" id="toggle-auto" ${state.config.autoAnalyze ? 'checked' : ''}>
-    </label>
-    <label class="settings-toggle-row">
-      <span>Share anonymous usage data</span>
-      <input type="checkbox" id="toggle-share" ${state.config.shareAnonymousData ? 'checked' : ''}>
-    </label>
-    <div class="settings-toggle-row" style="margin-top: 4px">
-      <span>Stuck? Reset the page</span>
-      <button class="settings-btn" id="btn-soft-reload" style="padding: 3px 10px">
-        ↺ Reload
-      </button>
+    <div class="settings-section">
+      <div class="settings-label">Backend</div>
+      <div class="settings-value">${state.config.backend || 'Not configured'}</div>
+      <button class="settings-btn" id="btn-reconfig">Change setup</button>
     </div>
-  </div>
-
-  <div class="settings-section">
-    <div class="settings-label">Page</div>
-    <button class="settings-btn" id="btn-reset-page">
-      ↺ Reset & reload page
-    </button>
-    <div class="settings-note" style="margin-top: 6px">
-      Clears provenance state and reloads the current page.
-      Use this if the pasted content flag is stuck.
+    ${licenseInfo ? `<div class="settings-section">${licenseInfo}</div>` : ''}
+    <div class="settings-section">
+      <label class="settings-toggle-row">
+        <span>Share anonymous usage data</span>
+        <input type="checkbox" id="toggle-share" ${state.config.shareAnonymousData ? 'checked' : ''}>
+      </label>
+      <label class="settings-toggle-row">
+        <span>Share prompt content for training</span>
+        <input type="checkbox" id="toggle-share-prompts" ${state.config.sharePromptContent ? 'checked' : ''}>
+      </label>
     </div>
-  </div>
-
-  <div class="settings-section" style="border-bottom: none">
-    <div class="settings-label">Extension</div>
-    <button class="settings-btn" id="btn-clear-storage" style="color: var(--color-error); border-color: rgba(248,113,113,0.2)">
-      ✕ Clear all data & reconfigure
-    </button>
-    <div class="settings-note" style="margin-top: 6px">
-      Wipes all saved config, API keys, and prompt library.
-      Cannot be undone.
+    <div class="settings-section">
+      <button class="settings-btn settings-btn-danger" id="btn-clear-data">Clear all data & reconfigure</button>
     </div>
-  </div>
-
-  <div class="settings-note">
-    Your API key and prompt content are never logged or shared.
-    <a href="https://ouroboros.dev/privacy" target="_blank">Privacy policy</a>
-  </div>
+    <div class="settings-note">
+      Your API key and prompt content are never logged without consent.
+      <a href="https://papercargo.com/privacy" target="_blank">Privacy policy →</a>
+    </div>
   `;
-
-// Reset page button
-$('btn-reset-page')?.addEventListener('click', () => {
-  window.parent.postMessage({ type: 'OUROBOROS_RESET_PAGE' }, '*');
-});
-
-// Clear all data button
-$('btn-clear-storage')?.addEventListener('click', async () => {
-  const confirmed = confirm(
-    'This will clear your API key, config, and prompt library. Are you sure?'
-  );
-  if (!confirmed) return;
-  await chrome.storage.sync.clear();
-  await chrome.storage.local.clear();
-  window.parent.postMessage({ type: 'OUROBOROS_RESET_PAGE' }, '*');
-});
 
   $('btn-reconfig')?.addEventListener('click', () => {
     chrome.runtime.sendMessage({ type: 'OPEN_ONBOARDING' });
   });
 
-  $('btn-soft-reload')?.addEventListener('click', () => {
-    window.parent.postMessage({ type: 'OUROBOROS_RESET_PAGE' }, '*');
+  $('btn-clear-data')?.addEventListener('click', async () => {
+    if (confirm('This will clear your API key, settings, and prompt library. Continue?')) {
+      await chrome.storage.sync.clear();
+      await chrome.storage.local.clear();
+      chrome.runtime.sendMessage({ type: 'OPEN_ONBOARDING' });
+    }
   });
 
-  ['auto', 'trigger', 'share'].forEach(key => {
+  ['share', 'share-prompts'].forEach(key => {
     const el = $(`toggle-${key}`);
-    const configKey = { auto: 'autoAnalyze', trigger: 'showDrawerTrigger', share: 'shareAnonymousData' }[key];
+    const configKey = { 'share': 'shareAnonymousData', 'share-prompts': 'sharePromptContent' }[key];
     el?.addEventListener('change', async () => {
       await saveConfig({ [configKey]: el.checked });
       state.config = await getConfig();
@@ -417,9 +554,7 @@ $('btn-clear-storage')?.addEventListener('click', async () => {
   });
 }
 
-function setupSettings() {
-  // Settings are rendered dynamically — nothing static to attach here
-}
+function setupSettings() {}
 
 // ── Tab navigation ────────────────────────────────────────────────────────
 function setupTabs() {
@@ -459,14 +594,12 @@ function setupButtons() {
   $('btn-close')?.addEventListener('click', () => {
     window.parent.postMessage({ type: 'OUROBOROS_CLOSE_DRAWER' }, '*');
   });
-  $('btn-settings')?.addEventListener('click', () => {
-    document.querySelectorAll('.tab-btn').forEach(b => {
-      b.classList.toggle('active', b.dataset.tab === 'settings');
-    });
-    document.querySelectorAll('.tab-view').forEach(v => {
-      v.classList.toggle('active', v.id === 'view-settings');
-    });
-    renderSettings();
+  $('btn-reload')?.addEventListener('click', () => {
+    window.parent.postMessage({ type: 'OUROBOROS_RESET_PAGE' }, '*');
+  });
+  // Paywall upgrade CTA
+  $('btn-upgrade')?.addEventListener('click', () => {
+    window.open('https://papercargo.com/ouroboros#pricing', '_blank');
   });
 }
 
@@ -482,10 +615,9 @@ function hideResult() {
 }
 
 function setOptimizeButtonLoading(loading) {
-  const btn = $('btn-optimize');
+  const btn   = $('btn-optimize');
   const label = $('btn-optimize-label');
-  const icon = btn?.querySelector('.btn-icon');
-
+  const icon  = btn?.querySelector('.btn-icon');
   if (!btn) return;
   btn.disabled = loading;
   if (label) label.textContent = loading ? 'Improving...' : 'Improve prompt';
@@ -495,7 +627,7 @@ function setOptimizeButtonLoading(loading) {
 function showError(message) {
   const preview = $('preview-text');
   if (preview) {
-    preview.innerHTML = `<span style="color: var(--color-error)">Error: ${escapeHtml(message)}</span>`;
+    preview.innerHTML = `<span style="color:var(--color-error)">Error: ${escapeHtml(message)}</span>`;
   }
 }
 

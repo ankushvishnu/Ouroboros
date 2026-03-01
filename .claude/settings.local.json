@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find . -name \"*.js\" -exec node -c {} ;)",
+      "Bash(git reset --hard)",
+      "Bash(git config core.autocrlf input)",
+      "Bash(git rm --cached -r .)",
+      "Bash(git reset HEAD)",
+      "Bash(git checkout -- .)",
+      "Bash(find . -type f -not -path './.git/*' -not -path './node_modules/*' -exec dos2unix {} ;)",
+      "Bash(git config --global core.eol lf)",
+      "Bash(git config --global core.autocrlf input)",
+      "Bash(git checkout HEAD -- adapters/openrouter.js adapters/index.js)"
+    ]
+  }
+}

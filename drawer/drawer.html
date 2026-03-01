@@ -22,18 +22,23 @@
       </div>
       <div class="drawer-header-actions">
         <span class="platform-badge" id="platform-badge">—</span>
-        <button class="icon-btn" id="btn-settings" title="Settings" aria-label="Settings">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
+        <button class="icon-btn" id="btn-reload" title="Reload page" aria-label="Reload page">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 4 23 10 17 10"/>
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
           </svg>
         </button>
         <button class="icon-btn" id="btn-close" title="Close" aria-label="Close drawer">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
           </svg>
         </button>
       </div>
     </header>
+
+    <!-- Usage meter — shown for trial users -->
+    <div class="usage-meter" id="usage-meter"></div>
 
     <!-- Tab Navigation -->
     <nav class="drawer-tabs" id="drawer-tabs">
@@ -47,10 +52,13 @@
 
       <!-- OPTIMIZE VIEW -->
       <section class="tab-view active" id="view-optimize">
-        <!-- Provenance flag — shown only for pasted/auto-populated content -->
+
+        <!-- Provenance flag -->
         <div class="provenance-flag hidden" id="provenance-flag">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
           </svg>
           <span id="provenance-text">Contains pasted content — review before sending</span>
         </div>
@@ -63,23 +71,52 @@
 
         <!-- Optimize button -->
         <button class="optimize-btn" id="btn-optimize" disabled>
-          <svg class="btn-icon spin-on-load" width="14" height="14" viewBox="0 0 100 100" fill="none">
+          <svg class="btn-icon" width="14" height="14" viewBox="0 0 100 100" fill="none">
             <circle cx="50" cy="50" r="36" stroke="currentColor" stroke-width="10"
               stroke-dasharray="185 40" stroke-linecap="round"/>
           </svg>
           <span id="btn-optimize-label">Improve prompt</span>
         </button>
 
-        <!-- Result area — hidden until result arrives -->
+        <!-- ── Paywall — shown when daily limit reached ─────────────── -->
+        <div class="paywall hidden" id="paywall">
+          <div class="paywall-icon">
+            <svg width="28" height="28" viewBox="0 0 100 100" fill="none">
+              <circle cx="50" cy="50" r="36" stroke="#f97316" stroke-width="8"
+                stroke-dasharray="185 40" stroke-linecap="round" opacity="0.5"/>
+            </svg>
+          </div>
+          <div class="paywall-title">Daily limit reached</div>
+          <div class="paywall-desc">
+            You've used all 5 free improvements today.<br>
+            Resets at midnight — or upgrade for unlimited use.
+          </div>
+          <button class="paywall-btn" id="btn-upgrade">
+            Upgrade to unlimited →
+          </button>
+          <div class="paywall-reset">Resets in <span id="paywall-reset-time"></span></div>
+        </div>
+
+        <!-- Result area -->
         <div class="result-area hidden" id="result-area">
 
-          <!-- Complexity badge -->
+          <!-- Result meta -->
           <div class="result-meta" id="result-meta">
             <span class="complexity-badge" id="complexity-badge">—</span>
             <span class="changes-count" id="changes-count"></span>
           </div>
 
-          <!-- Tab switcher: improved / diff / edit -->
+          <!-- Last use warning -->
+          <div class="last-use-warning hidden" id="last-use-warning">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+              <line x1="12" y1="9" x2="12" y2="13"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            Last free improvement today — copy disabled. <a href="https://papercargo.com/ouroboros#pricing" target="_blank">Upgrade →</a>
+          </div>
+
+          <!-- Tab switcher -->
           <div class="result-tabs">
             <button class="result-tab active" data-result-tab="improved">Improved</button>
             <button class="result-tab" data-result-tab="diff">Diff</button>
@@ -109,15 +146,9 @@
 
           <!-- Approval gate -->
           <div class="approval-gate">
-            <button class="approve-btn primary" id="btn-apply">
-              ✓ Use this
-            </button>
-            <button class="approve-btn secondary" id="btn-use-original">
-              Use original
-            </button>
-            <button class="approve-btn ghost" id="btn-save">
-              Save to library
-            </button>
+            <button class="approve-btn primary" id="btn-apply">✓ Use this</button>
+            <button class="approve-btn secondary" id="btn-use-original">Use original</button>
+            <button class="approve-btn ghost" id="btn-save">Save to library</button>
           </div>
 
         </div>
@@ -133,6 +164,7 @@
           </div>
           <p>Click inside any text field<br>on the page to begin.</p>
         </div>
+
       </section>
 
       <!-- LIBRARY VIEW -->
@@ -149,22 +181,12 @@
 
       <!-- SETTINGS VIEW -->
       <section class="tab-view" id="view-settings">
-        <div class="settings-content" id="settings-content">
-          <!-- Populated by drawer.js -->
-        </div>
-        <div class="donation-section" id="donation-section">
-          <p class="donation-text">Ouroboros is free. If it saves you time, consider supporting it.</p>
-          <div class="donation-btns">
-            <a href="https://paypal.me/ouroboros" target="_blank" class="donation-btn">PayPal</a>
-            <a href="https://donate.stripe.com/ouroboros" target="_blank" class="donation-btn">Card</a>
-          </div>
-        </div>
+        <div class="settings-content" id="settings-content"></div>
       </section>
 
     </main>
 
   </div>
-
   <script src="drawer.js" type="module"></script>
 </body>
 </html>

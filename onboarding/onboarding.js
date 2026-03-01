@@ -1,7 +1,16 @@
 // Ouroboros — Onboarding Flow
 
-// Inlined BACKENDS — avoids module import issues in extension pages
+// ── Backends ──────────────────────────────────────────────────────────────
 const BACKENDS = [
+  {
+    id: 'openrouter',
+    label: 'OpenRouter',
+    description: 'Free tier available — 100+ models',
+    requiresKey: true,
+    keyLabel: 'API Key',
+    keyPlaceholder: 'sk-or-...',
+    docsUrl: 'https://openrouter.ai/keys',
+  },
   {
     id: 'openai',
     label: 'OpenAI',
@@ -10,15 +19,6 @@ const BACKENDS = [
     keyLabel: 'API Key',
     keyPlaceholder: 'sk-...',
     docsUrl: 'https://platform.openai.com/api-keys',
-  },
-  {
-  id: 'openrouter',
-  label: 'OpenRouter',
-  description: 'Access 100+ models with one key — has free tier',
-  requiresKey: true,
-  keyLabel: 'API Key',
-  keyPlaceholder: 'sk-or-...',
-  docsUrl: 'https://openrouter.ai/keys',
   },
   {
     id: 'anthropic',
@@ -32,7 +32,7 @@ const BACKENDS = [
   {
     id: 'azure',
     label: 'Azure OpenAI',
-    description: "Your organization's Azure deployment",
+    description: "Your organisation's Azure deployment",
     requiresKey: true,
     keyLabel: 'API Key',
     keyPlaceholder: 'Azure API key',
@@ -42,24 +42,55 @@ const BACKENDS = [
   {
     id: 'ollama',
     label: 'Ollama (Local)',
-    description: 'Run models on your own machine — fully private',
+    description: 'Run models locally — fully private',
     requiresKey: false,
     keyLabel: null,
     docsUrl: 'https://ollama.com',
   },
 ];
 
-// Inlined storage helpers
+// ── OpenRouter models ─────────────────────────────────────────────────────
+const OPENROUTER_MODELS = [
+  {
+    group: 'Free tier',
+    models: [
+      { id: 'openrouter/auto',                              label: 'Auto (recommended)' },
+      { id: 'meta-llama/llama-3.3-70b-instruct:free',      label: 'Llama 3.3 70B' },
+      { id: 'google/gemini-2.0-flash-exp:free',            label: 'Gemini 2.0 Flash' },
+      { id: 'mistralai/mistral-small-3.1-24b-instruct:free', label: 'Mistral Small 3.1 24B' },
+      { id: 'google/gemma-3-27b-it:free',                  label: 'Gemma 3 27B' },
+    ],
+  },
+  {
+    group: 'Paid',
+    models: [
+      { id: 'openai/gpt-4o-mini',                          label: 'GPT-4o mini' },
+      { id: 'openai/gpt-4o',                               label: 'GPT-4o' },
+      { id: 'anthropic/claude-haiku-4-5',                  label: 'Claude Haiku' },
+      { id: 'mistralai/mistral-small-3.1-24b-instruct',    label: 'Mistral Small 3.1 24B (paid)' },
+    ],
+  },
+];
+
+// ── Storage helpers ───────────────────────────────────────────────────────
 async function getConfig() {
   const stored = await chrome.storage.sync.get(null);
-  return { backend: null, apiKey: null, ollamaEndpoint: 'http://localhost:11434', ollamaModel: 'llama3.2', configured: false, ...stored };
+  return {
+    backend: null,
+    apiKey: null,
+    ollamaEndpoint: 'http://localhost:11434',
+    ollamaModel: 'llama3.2',
+    openrouterModel: 'openrouter/auto',
+    configured: false,
+    ...stored,
+  };
 }
 
 async function saveConfig(partial) {
   await chrome.storage.sync.set(partial);
 }
 
-// Inlined Ollama ping
+// ── Ollama ping ───────────────────────────────────────────────────────────
 async function pingOllama(endpoint) {
   try {
     const response = await fetch(`${endpoint}/api/tags`, {
@@ -87,15 +118,18 @@ const $ = (id) => document.getElementById(id);
 // ── Init ──────────────────────────────────────────────────────────────────
 async function init() {
   const config = await getConfig();
-
-  // Pre-fill if already configured
-  if (config.backend) {
-    state.selectedBackend = config.backend;
-  }
+  if (config.backend) state.selectedBackend = config.backend;
 
   renderBackendGrid();
+  renderOpenRouterModels();
   setupEventListeners();
   updateUI();
+
+  // If a backend was previously selected, show its fields
+  if (state.selectedBackend) {
+    updateFieldsForBackend(state.selectedBackend);
+    updateTestButton();
+  }
 }
 
 // ── Backend grid ──────────────────────────────────────────────────────────
@@ -123,8 +157,6 @@ function selectBackend(id) {
   updateFieldsForBackend(id);
   updateTestButton();
   hideStatus();
-
-  // Auto-detect Ollama models
   if (id === 'ollama') detectOllamaModels();
 }
 
@@ -132,33 +164,51 @@ function updateFieldsForBackend(id) {
   const backend = BACKENDS.find(b => b.id === id);
   if (!backend) return;
 
-  // Key field
+  // API key field
   const keyField = $('key-field');
-  const keyLabel = $('key-label');
-  const keyInput = $('api-key-input');
-  const keyHelp = $('key-help');
-
-  if (backend.requiresKey) {
-    keyField.style.display = 'block';
-    if (keyLabel) keyLabel.textContent = backend.keyLabel;
-    if (keyInput) keyInput.placeholder = backend.keyPlaceholder;
-    if (keyHelp) keyHelp.innerHTML = `Get your key at <a href="${backend.docsUrl}" target="_blank">${backend.docsUrl}</a>`;
-  } else {
-    keyField.style.display = 'none';
+  if (keyField) {
+    keyField.style.display = backend.requiresKey ? 'block' : 'none';
   }
 
-  // Azure extra fields
-  $('azure-fields').style.display = id === 'azure' ? 'block' : 'none';
+  if (backend.requiresKey) {
+    const keyLabel = $('key-label');
+    const keyInput = $('api-key-input');
+    const keyHelp  = $('key-help');
+    if (keyLabel) keyLabel.textContent = backend.keyLabel;
+    if (keyInput) keyInput.placeholder = backend.keyPlaceholder;
+    if (keyHelp)  keyHelp.innerHTML = `Get your key at <a href="${backend.docsUrl}" target="_blank">${backend.docsUrl}</a>`;
+  }
 
-  // Ollama fields
-  $('ollama-fields').style.display = id === 'ollama' ? 'block' : 'none';
+  // Backend-specific extra fields
+  const openrouterFields = $('openrouter-fields');
+  const azureFields      = $('azure-fields');
+  const ollamaFields     = $('ollama-fields');
+
+  if (openrouterFields) openrouterFields.style.display = id === 'openrouter' ? 'block' : 'none';
+  if (azureFields)      azureFields.style.display      = id === 'azure'      ? 'block' : 'none';
+  if (ollamaFields)     ollamaFields.style.display      = id === 'ollama'     ? 'block' : 'none';
+}
+
+// ── OpenRouter model dropdown ─────────────────────────────────────────────
+function renderOpenRouterModels() {
+  const sel = $('openrouter-model-select');
+  if (!sel) return;
+
+  sel.innerHTML = OPENROUTER_MODELS.map(group => `
+    <optgroup label="${group.group}">
+      ${group.models.map(m => `<option value="${m.id}">${m.label}</option>`).join('')}
+    </optgroup>
+  `).join('');
+
+  // Default to openrouter/auto
+  sel.value = 'openrouter/auto';
 }
 
 // ── Ollama model detection ────────────────────────────────────────────────
 async function detectOllamaModels() {
-  const hint = $('ollama-models-hint');
+  const hint       = $('ollama-models-hint');
   const modelInput = $('ollama-model');
-  const endpoint = $('ollama-endpoint')?.value || 'http://localhost:11434';
+  const endpoint   = $('ollama-endpoint')?.value || 'http://localhost:11434';
 
   if (hint) hint.textContent = 'Detecting available models...';
 
@@ -169,27 +219,23 @@ async function detectOllamaModels() {
     if (modelInput && !modelInput.value) modelInput.value = result.models[0];
   } else {
     if (hint) hint.textContent = result.error
-      ? `Ollama not detected. Is it running? ${result.error}`
-      : 'No models found. Pull a model with: ollama pull llama3.2';
+      ? `Ollama not detected. Is it running? (${result.error})`
+      : 'No models found. Pull one with: ollama pull llama3.2';
   }
 }
 
 // ── Connection test ───────────────────────────────────────────────────────
 async function testConnection() {
   const btn = $('btn-test');
+  if (!btn) return;
   btn.disabled = true;
   btn.textContent = 'Testing...';
   hideStatus();
 
   try {
     const config = buildConfig();
-    console.log('[Ouroboros] Saving config:', config);
     await saveConfig(config);
 
-    const saved = await getConfig();
-    console.log('[Ouroboros] Saved config reads back as:', saved);
-
-    // Send a minimal test message via background
     const response = await chrome.runtime.sendMessage({
       type: 'OPTIMIZE_PROMPT',
       payload: { prompt: 'Hello', provenance: 'typed' },
@@ -200,8 +246,6 @@ async function testConnection() {
     state.connectionTested = true;
     showStatus('success', '✓ Connected successfully');
     btn.textContent = 'Connected ✓';
-
-    // Auto-advance after short delay
     setTimeout(() => goToStep(1), 800);
 
   } catch (err) {
@@ -215,8 +259,7 @@ async function testConnection() {
 function buildConfig() {
   const backend = state.selectedBackend;
 
-  // Start with a clean slate — explicitly null everything
-  // so stale keys from previous setups don't persist
+  // Start clean — nulls prevent stale values persisting across backend switches
   const clean = {
     backend,
     configured: true,
@@ -226,7 +269,7 @@ function buildConfig() {
     azureEndpoint: null,
     azureDeployment: null,
     azureApiVersion: '2024-02-01',
-    openrouterModel: null,
+    openrouterModel: 'openrouter/auto',
   };
 
   if (backend === 'ollama') {
@@ -250,7 +293,7 @@ function buildConfig() {
     return {
       ...clean,
       apiKey: $('api-key-input')?.value || '',
-      openrouterModel: 'mistralai/mistral-7b-instruct:free',
+      openrouterModel: $('openrouter-model-select')?.value || 'openrouter/auto',
     };
   }
 
@@ -268,7 +311,6 @@ async function finishSetup() {
     shareAnonymousData: state.shareData,
     onboardingComplete: true,
   });
-
   goToStep(2);
 }
 
@@ -279,12 +321,10 @@ function goToStep(n) {
 }
 
 function updateUI() {
-  // Steps
   document.querySelectorAll('.step').forEach((el, i) => {
     el.classList.toggle('active', i === state.step);
   });
 
-  // Dots
   [0, 1, 2].forEach(i => {
     const dot = $(`dot-${i}`);
     if (!dot) return;
@@ -321,16 +361,19 @@ function setupEventListeners() {
   $('btn-finish')?.addEventListener('click', finishSetup);
   $('btn-close-onboarding')?.addEventListener('click', () => window.close());
 
-  // Privacy toggle
   $('toggle-privacy')?.addEventListener('click', () => {
     state.shareData = !state.shareData;
     $('toggle-privacy').classList.toggle('on', state.shareData);
   });
 
-  // Live validation for key input
   $('api-key-input')?.addEventListener('input', () => {
     state.connectionTested = false;
     updateTestButton();
+  });
+
+  // Re-detect Ollama models if endpoint changes
+  $('ollama-endpoint')?.addEventListener('change', () => {
+    if (state.selectedBackend === 'ollama') detectOllamaModels();
   });
 }
 
