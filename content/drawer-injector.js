@@ -16,14 +16,8 @@
     btn.id = 'ouroboros-trigger';
     btn.title = 'Ouroboros — Improve this prompt';
     btn.setAttribute('aria-label', 'Open Ouroboros prompt optimizer');
-    btn.innerHTML = `
-      <svg width="16" height="16" viewBox="0 0 100 100" fill="none">
-        <circle cx="50" cy="50" r="36" stroke="#b4ff64" stroke-width="8"
-          stroke-dasharray="185 40" stroke-linecap="round"/>
-        <polygon points="79,44 91,50 79,56" fill="#b4ff64"
-          transform="rotate(48,85,50)"/>
-      </svg>
-    `;
+    const iconUrl = chrome.runtime.getURL('assets/icons/icon-32.png');
+    btn.innerHTML = `<img src="${iconUrl}" width="18" height="18" alt="" style="border-radius:50%">`;
 
     btn.addEventListener('click', (e) => {
       e.preventDefault();
@@ -105,13 +99,6 @@
         window.__ouroborosInterceptor?.setActivePrompt(prompt);
         toggleDrawer(); // close after applying
         break;
-      }
-
-    case 'OUROBOROS_RESET_PAGE': {
-      // Close drawer first then reload
-      if (drawerOpen) toggleDrawer();
-      setTimeout(() => window.location.reload(), 300);
-      break;
       }
 
       case 'OUROBOROS_CLOSE_DRAWER': {
