@@ -74,20 +74,19 @@
           <span id="btn-optimize-label">Improve prompt</span>
         </button>
 
-        <!-- ── Paywall — shown when daily limit reached ─────────────── -->
+        <!-- ── Paywall — shown when attempt limit reached ───────────── -->
         <div class="paywall hidden" id="paywall">
           <div class="paywall-icon">
             <img src="../assets/icons/icon-48.png" width="28" height="28" alt="" style="opacity:0.4">
           </div>
-          <div class="paywall-title">Daily limit reached</div>
+          <div class="paywall-title">Taking a short break</div>
           <div class="paywall-desc">
-            You've used all 5 free improvements today.<br>
-            Resets at midnight — or upgrade for unlimited use.
+            You've used all 5 free improvements.<br>
+            Available again in <span id="paywall-reset-time">2h</span> — or upgrade for unlimited use.
           </div>
           <button class="paywall-btn" id="btn-upgrade">
             Upgrade to unlimited →
           </button>
-          <div class="paywall-reset">Resets in <span id="paywall-reset-time"></span></div>
         </div>
 
         <!-- Result area -->
@@ -106,7 +105,7 @@
               <line x1="12" y1="9" x2="12" y2="13"/>
               <line x1="12" y1="17" x2="12.01" y2="17"/>
             </svg>
-            Last free improvement today — copy disabled. <a href="https://papercargo.com/ouroboros#pricing" target="_blank">Upgrade →</a>
+            Last free improvement — copying counts as an attempt. <a href="https://papercargo.com/ouroboros#pricing" target="_blank">Upgrade →</a>
           </div>
 
           <!-- Tab switcher -->

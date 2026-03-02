@@ -1,9 +1,9 @@
 // Ouroboros — Drawer Orchestrator v2
-// Usage meter, hard block UI, copy/paste protection, license-aware rendering
+// 2-hour cooldown system, attempt counter, preventive copy blocking
 
 import { diffWords } from '../core/diff.js';
 import { getConfig, saveConfig, savePromptToLibrary, getPromptLibrary, incrementPromptUse, deletePrompt } from '../core/storage.js';
-import { maskImprovedPrompt } from '../core/usage.js';
+import { maskImprovedPrompt, formatCooldown } from '../core/usage.js';
 
 // ── State ─────────────────────────────────────────────────────────────────
 let state = {
@@ -15,14 +15,14 @@ let state = {
   currentResultTab: 'improved',
   config: null,
   startTime: null,
-  // Usage / license state (fetched on init)
   isTrial: false,
-  todayUsage: 0,
-  dailyLimit: 5,
-  launched: false,
+  attemptCount: 0,
+  attemptLimit: 5,
+  cooldownUntil: null,
+  cooldownRemainingMs: 0,
   licenseStatus: null,
-  // Whether this result has been accepted already (prevents double-count)
   resultAccepted: false,
+  // Copy debounce
 };
 
 const $ = (id) => document.getElementById(id);
@@ -38,43 +38,56 @@ async function init() {
   setupSettings();
   renderSettings();
   renderUsageMeter();
-  startResetCountdown();
+  startCooldownCountdown();
 
   window.parent.postMessage({ type: 'OUROBOROS_GET_PROMPT' }, '*');
 }
 
-// ── Paywall reset countdown ───────────────────────────────────────────────
-function startResetCountdown() {
+// ── Cooldown countdown (updates every 30s) ────────────────────────────────
+function startCooldownCountdown() {
   function update() {
+    if (!state.cooldownUntil) return;
+    const remaining = Math.max(0, state.cooldownUntil - Date.now());
+    state.cooldownRemainingMs = remaining;
+
+    // Update paywall timer text
     const el = $('paywall-reset-time');
-    if (!el) return;
-    const now = new Date();
-    const midnight = new Date();
-    midnight.setHours(24, 0, 0, 0);
-    const diff = midnight - now;
-    const h = Math.floor(diff / 3600000);
-    const m = Math.floor((diff % 3600000) / 60000);
-    el.textContent = `${h}h ${m}m`;
+    if (el) el.textContent = formatCooldown(remaining);
+
+    // Update usage meter
+    renderUsageMeter();
+
+    // Cooldown just expired — auto-unblock
+    if (remaining === 0 && state.cooldownUntil) {
+      state.cooldownUntil = null;
+      state.attemptCount = 0;
+      hidePaywall();
+      renderUsageMeter();
+      const btn = $('btn-optimize');
+      if (btn && state.prompt?.trim()) btn.removeAttribute('disabled');
+    }
   }
+
   update();
-  setInterval(update, 60000);
+  setInterval(update, 30000);
 }
 
-// ── Fetch current usage / license status from background ─────────────────
+// ── Fetch current status from background ──────────────────────────────────
 async function refreshStatus() {
   try {
     const status = await chrome.runtime.sendMessage({ type: 'GET_STATUS' });
-    state.isTrial    = status.isTrial;
-    state.todayUsage = status.todayUsage || 0;
-    state.dailyLimit = status.dailyLimit || 5;
-    state.launched   = status.launched;
-    state.licenseStatus = status.licenseStatus;
+    state.isTrial             = !status.licenseStatus?.valid;
+    state.attemptCount        = status.attemptState?.count ?? 0;
+    state.cooldownUntil       = status.attemptState?.cooldownUntil ?? null;
+    state.cooldownRemainingMs = status.cooldownRemainingMs ?? 0;
+    state.attemptLimit        = status.attemptLimit ?? 5;
+    state.licenseStatus       = status.licenseStatus;
   } catch (e) {
     console.warn('[Ouroboros] Could not fetch status:', e.message);
   }
 }
 
-// ── Message bridge (iframe ↔ content script) ──────────────────────────────
+// ── Message bridge ────────────────────────────────────────────────────────
 window.addEventListener('message', (e) => {
   if (!e.data?.type?.startsWith('OUROBOROS_')) return;
   switch (e.data.type) {
@@ -96,7 +109,7 @@ function updateContext(prompt, provenance, platform) {
   const badge = $('platform-badge');
   if (badge) badge.textContent = platform !== 'generic' ? platform : '—';
 
-  const flag = $('provenance-flag');
+  const flag     = $('provenance-flag');
   const flagText = $('provenance-text');
   if (flag && flagText) {
     if (provenance === 'pasted' || provenance === 'mixed' || provenance === 'auto-populated') {
@@ -128,37 +141,38 @@ function renderUsageMeter() {
   const meter = $('usage-meter');
   if (!meter) return;
 
-  // Licensed users: show beta badge instead of meter
-  if (!state.isTrial) {
-    if (state.licenseStatus?.valid) {
-      meter.innerHTML = `
-        <span class="usage-badge usage-badge-beta">
-          ✦ Beta — unlimited
-        </span>`;
-    } else if (!state.launched) {
-      meter.innerHTML = `
-        <span class="usage-badge usage-badge-beta">
-          ✦ Open beta
-        </span>`;
-    } else {
-      meter.innerHTML = '';
-    }
+  // Licensed — show badge
+  if (!state.isTrial && state.licenseStatus?.valid) {
+    meter.innerHTML = `<span class="usage-badge usage-badge-beta">✦ Beta — unlimited</span>`;
     return;
   }
 
-  const used  = state.todayUsage;
-  const limit = state.dailyLimit;
-  const left  = Math.max(0, limit - used);
-  const pct   = Math.min(100, (used / limit) * 100);
+  // Not trial (unlaunched, unconfigured) — hide meter
+  if (!state.isTrial) {
+    meter.innerHTML = '';
+    return;
+  }
 
-  const color = left === 0   ? 'var(--color-error)'
-              : left === 1   ? 'var(--color-warning)'
+  const count = state.attemptCount;
+  const limit = state.attemptLimit;
+  const left  = Math.max(0, limit - count);
+  const pct   = Math.min(100, (count / limit) * 100);
+  const inCooldown = state.cooldownUntil && Date.now() < state.cooldownUntil;
+
+  const color = inCooldown || left === 0 ? 'var(--color-error)'
+              : left === 1               ? 'var(--color-warning)'
               : 'var(--color-accent)';
+
+  const label = inCooldown
+    ? `Cooldown — available in ${formatCooldown(state.cooldownRemainingMs)}`
+    : left === 0
+      ? 'Limit reached'
+      : `${left} improvement${left !== 1 ? 's' : ''} left`;
 
   meter.innerHTML = `
     <div class="usage-row">
-      <span class="usage-label">${left === 0 ? 'Daily limit reached' : `${left} improvement${left !== 1 ? 's' : ''} left today`}</span>
-      <span class="usage-count" style="color:${color}">${used} / ${limit}</span>
+      <span class="usage-label">${label}</span>
+      <span class="usage-count" style="color:${color}">${count} / ${limit}</span>
     </div>
     <div class="usage-track">
       <div class="usage-fill" style="width:${pct}%; background:${color}"></div>
@@ -167,8 +181,11 @@ function renderUsageMeter() {
 
 // ── Paywall ───────────────────────────────────────────────────────────────
 function showPaywall() {
-  const pw = $('paywall');
-  if (pw) pw.classList.remove('hidden');
+  // Update the reset time text before showing
+  const el = $('paywall-reset-time');
+  if (el) el.textContent = formatCooldown(state.cooldownRemainingMs);
+
+  $('paywall')?.classList.remove('hidden');
   $('result-area')?.classList.add('hidden');
   $('btn-optimize')?.setAttribute('disabled', 'true');
 }
@@ -181,11 +198,10 @@ function hidePaywall() {
 async function optimize() {
   if (!state.prompt?.trim() || state.loading) return;
 
-  // Refresh status before each optimization
   await refreshStatus();
 
-  // Hard block if limit reached
-  if (state.isTrial && state.todayUsage >= state.dailyLimit) {
+  // Hard block if in cooldown
+  if (state.isTrial && state.cooldownUntil && Date.now() < state.cooldownUntil) {
     showPaywall();
     return;
   }
@@ -209,7 +225,9 @@ async function optimize() {
     }
 
     if (response.error === 'DAILY_LIMIT_REACHED') {
-      state.todayUsage = state.dailyLimit;
+      state.cooldownUntil      = response.cooldownUntil;
+      state.cooldownRemainingMs = response.cooldownRemainingMs;
+      state.attemptCount       = response.count;
       renderUsageMeter();
       showPaywall();
       return;
@@ -219,10 +237,9 @@ async function optimize() {
 
     state.result = response.result;
 
-    // Update local usage state from result
-    if (response.result.usageAfterThis !== null) {
-      // usageAfterThis is what it WILL be after accept — show current
-      state.todayUsage = Math.max(0, response.result.usageAfterThis - 1);
+    // Sync attempt count from result
+    if (response.result.attemptCount !== null && response.result.attemptCount !== undefined) {
+      state.attemptCount = response.result.attemptCount;
     }
 
     renderResult(state.result);
@@ -256,55 +273,49 @@ function renderResult(result) {
       : 'no changes';
   }
 
-  // If trial and this would be the last use — show masked version
-  const isLastUse = state.isTrial && (state.todayUsage + 1 >= state.dailyLimit);
+  // Is this the last free attempt?
+  const isLastUse = state.isTrial && (state.attemptCount + 1 >= state.attemptLimit);
   const improvedText = result.improved || result.original;
 
   // Improved view
   const improved = $('improved-text');
   if (improved) {
+    improved.textContent = improvedText;
+
     if (isLastUse) {
-      // Last free use — show full text but disable copy
-      improved.textContent = improvedText;
+      // Block copy on last use — text is non-selectable, no workaround
       improved.style.userSelect = 'none';
       improved.style.webkitUserSelect = 'none';
-      improved.addEventListener('copy', (e) => e.preventDefault(), { once: false });
-      improved.addEventListener('contextmenu', (e) => e.preventDefault(), { once: false });
+      improved.addEventListener('contextmenu', (e) => e.preventDefault(), false);
     } else {
-      improved.textContent = improvedText;
       improved.style.userSelect = '';
       improved.style.webkitUserSelect = '';
     }
   }
 
-  // Diff view — never masked (structural info only, not copyable prompt)
+  // Diff view
   const diffEl = $('diff-text');
   if (diffEl) {
     const tokens = diffWords(result.original, improvedText);
     diffEl.innerHTML = tokens.map(token => {
-      const cls = token.type === 'add' ? 'diff-add'
-        : token.type === 'remove' ? 'diff-remove'
-        : 'diff-same';
+      const cls = token.type === 'add'    ? 'diff-add'
+                : token.type === 'remove' ? 'diff-remove'
+                : 'diff-same';
       return `<span class="${cls}">${escapeHtml(token.text)}</span>`;
     }).join('');
     if (isLastUse) {
       diffEl.style.userSelect = 'none';
       diffEl.style.webkitUserSelect = 'none';
+
     }
   }
 
-  // Edit view — disabled on last free use
+  // Edit view
   const editArea = $('edit-textarea');
   if (editArea) {
-    editArea.value = improvedText;
+    editArea.value    = improvedText;
     editArea.readOnly = isLastUse;
-    if (isLastUse) {
-      editArea.style.opacity = '0.5';
-      editArea.title = 'Editing disabled on last free use — upgrade for full access';
-    } else {
-      editArea.style.opacity = '';
-      editArea.title = '';
-    }
+    editArea.style.opacity = isLastUse ? '0.5' : '';
   }
 
   // Changes list
@@ -329,22 +340,19 @@ function renderResult(result) {
     reasoning.classList.add('hidden');
   }
 
-  // Apply button label
+  // Apply button
   const applyBtn = $('btn-apply');
   if (applyBtn) {
     applyBtn.textContent = result.changes?.length === 0 ? '✓ Send as-is' : '✓ Use this';
   }
 
-  // Show last-use warning if applicable
+  // Last-use warning banner
   const lastUseWarning = $('last-use-warning');
   if (lastUseWarning) {
-    if (isLastUse) {
-      lastUseWarning.classList.remove('hidden');
-    } else {
-      lastUseWarning.classList.add('hidden');
-    }
+    lastUseWarning.classList.toggle('hidden', !isLastUse);
   }
 }
+
 
 // ── Approval actions ──────────────────────────────────────────────────────
 async function applyPrompt(useOriginal = false) {
@@ -356,16 +364,15 @@ async function applyPrompt(useOriginal = false) {
 
   if (!promptToApply) return;
 
-  // Prevent double-counting if user clicks "Use this" twice
+  // "Use this" counts as an attempt — only once per result
   if (!useOriginal && !state.resultAccepted) {
     state.resultAccepted = true;
 
-    // Tell background to increment usage count
     const countResponse = await chrome.runtime.sendMessage({
       type: 'ACCEPT_IMPROVEMENT',
       payload: {
-        complexity: state.result?.complexity,
-        provenance: state.provenance,
+        complexity:    state.result?.complexity,
+        provenance:    state.provenance,
         originalLength: state.result?.original?.length || 0,
         improvedLength: promptToApply.length,
         timeToDecision: state.startTime ? Date.now() - state.startTime : 0,
@@ -373,16 +380,19 @@ async function applyPrompt(useOriginal = false) {
       }
     });
 
-    // Update local count and re-render meter
-    if (countResponse?.newCount !== null && countResponse?.newCount !== undefined) {
-      state.todayUsage = countResponse.newCount;
+    if (countResponse?.attemptState) {
+      state.attemptCount  = countResponse.attemptState.count;
+      state.cooldownUntil = countResponse.attemptState.cooldownUntil;
+      state.cooldownRemainingMs = countResponse.attemptState.cooldownUntil
+        ? Math.max(0, countResponse.attemptState.cooldownUntil - Date.now())
+        : 0;
     }
 
     renderUsageMeter();
 
-    // If this was the last free use, show paywall after applying
-    if (state.isTrial && state.todayUsage >= state.dailyLimit) {
-      setTimeout(showPaywall, 300);
+    // Show paywall after applying if cooldown just triggered
+    if (countResponse?.attemptState?.justTriggeredCooldown) {
+      setTimeout(showPaywall, 400);
     }
   }
 
@@ -391,7 +401,6 @@ async function applyPrompt(useOriginal = false) {
     payload: { prompt: promptToApply }
   }, '*');
 
-  // Also log for analytics (non-counting)
   chrome.runtime.sendMessage({
     type: 'LOG_EVENT',
     payload: {
@@ -399,8 +408,8 @@ async function applyPrompt(useOriginal = false) {
       action: useOriginal ? 'approved_original' : 'approved_optimized',
       originalLength: state.result?.original?.length || 0,
       improvedLength: promptToApply.length,
-      complexity: state.result?.complexity,
-      provenance: state.provenance,
+      complexity:    state.result?.complexity,
+      provenance:    state.provenance,
       inferenceLayer: state.result?.inferenceLayer || 'cloud',
       timeToDecision: state.startTime ? Date.now() - state.startTime : 0,
     }
@@ -411,9 +420,9 @@ async function saveToLibrary() {
   if (!state.result) return;
 
   await savePromptToLibrary({
-    original: state.result.original,
-    improved: state.result.improved,
-    changes: state.result.changes,
+    original:   state.result.original,
+    improved:   state.result.improved,
+    changes:    state.result.changes,
     complexity: state.result.complexity,
   });
 
@@ -421,10 +430,7 @@ async function saveToLibrary() {
   if (btn) {
     btn.textContent = '✓ Saved';
     btn.disabled = true;
-    setTimeout(() => {
-      btn.textContent = 'Save to library';
-      btn.disabled = false;
-    }, 2000);
+    setTimeout(() => { btn.textContent = 'Save to library'; btn.disabled = false; }, 2000);
   }
 
   await renderLibrary();
@@ -435,7 +441,7 @@ async function renderLibrary(filter = '') {
   const list = $('library-list');
   if (!list) return;
 
-  const prompts = await getPromptLibrary();
+  const prompts  = await getPromptLibrary();
   const filtered = filter
     ? prompts.filter(p =>
         p.title?.toLowerCase().includes(filter.toLowerCase()) ||
@@ -453,8 +459,8 @@ async function renderLibrary(filter = '') {
       <div class="library-item-header">
         <span class="library-item-title">${escapeHtml(p.title || 'Untitled')}</span>
         <div class="library-item-actions">
-          <button class="lib-btn" data-action="use" data-id="${p.id}" title="Use this prompt">Use</button>
-          <button class="lib-btn lib-btn-delete" data-action="delete" data-id="${p.id}" title="Delete">✕</button>
+          <button class="lib-btn" data-action="use" data-id="${p.id}">Use</button>
+          <button class="lib-btn lib-btn-delete" data-action="delete" data-id="${p.id}">✕</button>
         </div>
       </div>
       <div class="library-item-preview">${escapeHtml(p.improved?.slice(0, 100))}${p.improved?.length > 100 ? '...' : ''}</div>
@@ -470,18 +476,13 @@ async function renderLibrary(filter = '') {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const { action, id } = btn.dataset;
-
       if (action === 'use') {
         await incrementPromptUse(id);
         const prompt = filtered.find(p => p.id === id);
         if (prompt) {
-          window.parent.postMessage({
-            type: 'OUROBOROS_APPLY_PROMPT',
-            payload: { prompt: prompt.improved }
-          }, '*');
+          window.parent.postMessage({ type: 'OUROBOROS_APPLY_PROMPT', payload: { prompt: prompt.improved } }, '*');
         }
       }
-
       if (action === 'delete') {
         await deletePrompt(id);
         await renderLibrary(filter);
@@ -500,19 +501,30 @@ function renderSettings() {
   const container = $('settings-content');
   if (!container || !state.config) return;
 
-  const licenseInfo = state.licenseStatus?.valid
-    ? `<div class="settings-license-badge">✦ Beta — unlimited until ${new Date(state.licenseStatus.validUntil).toLocaleDateString()}</div>`
-    : state.isTrial
-      ? `<div class="settings-license-free">${state.todayUsage} / ${state.dailyLimit} used today · <a href="https://papercargo.com/ouroboros#pricing" target="_blank">Upgrade →</a></div>`
-      : '';
+  const inCooldown = state.cooldownUntil && Date.now() < state.cooldownUntil;
+
+  const email       = state.licenseStatus?.email || state.config?.userEmail || null;
+  const tier        = state.licenseStatus?.licenseType || 'none';
+  const tierLabels  = { beta: '✦ Beta', trial: 'Trial', pro: '✦ Pro', none: 'Free trial' };
+  const tierLabel   = tierLabels[tier] || 'Free trial';
+
+  const accountSection = email
+    ? `<div class="settings-label">Account</div>
+       <div class="settings-value" style="word-break:break-all">${email}</div>
+       <div class="settings-value" style="margin-top:4px;font-size:11px;color:var(--color-text-dim)">${tierLabel}${inCooldown ? ` · Cooldown: ${formatCooldown(state.cooldownRemainingMs)}` : state.isTrial ? ` · ${state.attemptCount}/${state.attemptLimit} used` : ' · Unlimited'}</div>`
+    : `<div class="settings-label">Account</div>
+       <div class="settings-value" style="color:var(--color-text-dim)">Not signed in — free trial</div>`;
 
   container.innerHTML = `
     <div class="settings-section">
+      ${accountSection}
+      <button class="settings-btn" id="btn-reconfig" style="margin-top:10px">Change setup</button>
+      ${email ? `<button class="settings-btn" id="btn-sign-out" style="margin-top:6px">Sign out</button>` : ''}
+    </div>
+    <div class="settings-section">
       <div class="settings-label">Backend</div>
       <div class="settings-value">${state.config.backend || 'Not configured'}</div>
-      <button class="settings-btn" id="btn-reconfig">Change setup</button>
     </div>
-    ${licenseInfo ? `<div class="settings-section">${licenseInfo}</div>` : ''}
     <div class="settings-section">
       <label class="settings-toggle-row">
         <span>Share anonymous usage data</span>
@@ -533,7 +545,18 @@ function renderSettings() {
   `;
 
   $('btn-reconfig')?.addEventListener('click', () => {
+    // Open onboarding at Step 0 so user can change email/backend
     chrome.runtime.sendMessage({ type: 'OPEN_ONBOARDING' });
+  });
+
+  $('btn-sign-out')?.addEventListener('click', async () => {
+    if (confirm('Sign out? You\'ll revert to the free trial.')) {
+      await chrome.runtime.sendMessage({ type: 'SIGN_OUT' });
+      state.licenseStatus = { valid: false, licenseType: 'none', email: null };
+      state.isTrial = true;
+      renderSettings();
+      renderUsageMeter();
+    }
   });
 
   $('btn-clear-data')?.addEventListener('click', async () => {
@@ -556,7 +579,7 @@ function renderSettings() {
 
 function setupSettings() {}
 
-// ── Tab navigation ────────────────────────────────────────────────────────
+// ── Tabs ──────────────────────────────────────────────────────────────────
 function setupTabs() {
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -565,8 +588,7 @@ function setupTabs() {
       document.querySelectorAll('.tab-view').forEach(v => v.classList.remove('active'));
       btn.classList.add('active');
       $(`view-${tab}`)?.classList.add('active');
-
-      if (tab === 'library') renderLibrary();
+      if (tab === 'library')  renderLibrary();
       if (tab === 'settings') renderSettings();
     });
   });
@@ -585,7 +607,7 @@ function setupResultTabs() {
   });
 }
 
-// ── Button setup ──────────────────────────────────────────────────────────
+// ── Buttons ───────────────────────────────────────────────────────────────
 function setupButtons() {
   $('btn-optimize')?.addEventListener('click', optimize);
   $('btn-apply')?.addEventListener('click', () => applyPrompt(false));
@@ -597,7 +619,6 @@ function setupButtons() {
   $('btn-reload')?.addEventListener('click', () => {
     window.parent.postMessage({ type: 'OUROBOROS_RESET_PAGE' }, '*');
   });
-  // Paywall upgrade CTA
   $('btn-upgrade')?.addEventListener('click', () => {
     window.open('https://papercargo.com/ouroboros#pricing', '_blank');
   });
@@ -621,7 +642,7 @@ function setOptimizeButtonLoading(loading) {
   if (!btn) return;
   btn.disabled = loading;
   if (label) label.textContent = loading ? 'Improving...' : 'Improve prompt';
-  if (icon) icon.classList.toggle('spinning', loading);
+  if (icon)  icon.classList.toggle('spinning', loading);
 }
 
 function showError(message) {
