@@ -540,7 +540,7 @@ function renderSettings() {
     </div>
     <div class="settings-note">
       Your API key and prompt content are never logged without consent.
-      <a href="https://papercargo.com/privacy" target="_blank">Privacy policy →</a>
+      <a href="https://papercargo.com/privacy.html" target="_blank">Privacy policy →</a>
     </div>
   `;
 
