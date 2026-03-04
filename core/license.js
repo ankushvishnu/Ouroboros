@@ -1,7 +1,8 @@
 // Ouroboros — License & Remote Config
-// Handles key verification, beta status, launch date, config caching
+// Email-based identity — no passwords, no magic links
+// Tier: beta (unlimited) | trial (5-attempt cooldown) | none (same as trial)
 
-const SUPABASE_URL = 'https://igwbzpdtyuyowzgbissj.supabase.co';
+const SUPABASE_URL      = 'https://igwbzpdtyuyowzgbissj.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlnd2J6cGR0eXV5b3d6Z2Jpc3NqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNzM4ODMsImV4cCI6MjA4NzY0OTg4M30.z19H30GlmM75erma1V9yIdQLdC-BGE9kGiZ7AS1m-KI';
 
 const HEADERS = {
@@ -10,62 +11,38 @@ const HEADERS = {
   'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
 };
 
-// Cache keys
-const CACHE_KEY_CONFIG    = 'remoteConfig';
-const CACHE_KEY_LICENSE   = 'licenseStatus';
-const CACHE_TTL_MS        = 24 * 60 * 60 * 1000; // 24 hours
+// Remote config is the only thing still cached — it's static metadata
+// (launch date, free limit) and doesn't affect identity correctness
+const CACHE_KEY_CONFIG  = 'remoteConfig';
+const CONFIG_CACHE_TTL  = 60 * 60 * 1000; // 1 hour
 
 // ── Remote config ────────────────────────────────────────────────────────
 export async function getRemoteConfig() {
-  // Check local cache first
   const { remoteConfig } = await chrome.storage.local.get(CACHE_KEY_CONFIG);
-
-  if (remoteConfig && remoteConfig.cachedAt) {
-    const age = Date.now() - remoteConfig.cachedAt;
-    if (age < CACHE_TTL_MS) {
-      return remoteConfig.data;
-    }
+  if (remoteConfig?.cachedAt && (Date.now() - remoteConfig.cachedAt) < CONFIG_CACHE_TTL) {
+    return remoteConfig.data;
   }
-
   try {
     const res = await fetch(
       `${SUPABASE_URL}/rest/v1/ouroboros_config?select=key,value`,
       { headers: HEADERS }
     );
-
     if (!res.ok) throw new Error(`Config fetch failed: ${res.status}`);
-
     const rows = await res.json();
-
-    // Convert array of {key, value} to plain object
     const config = {};
     rows.forEach(row => { config[row.key] = row.value; });
-
-    // Cache it
-    await chrome.storage.local.set({
-      [CACHE_KEY_CONFIG]: { data: config, cachedAt: Date.now() }
-    });
-
+    await chrome.storage.local.set({ [CACHE_KEY_CONFIG]: { data: config, cachedAt: Date.now() } });
     console.log('[Ouroboros] Remote config loaded:', config);
     return config;
-
   } catch (err) {
     console.warn('[Ouroboros] Remote config fetch failed, using defaults:', err.message);
-
-    // Safe defaults if network fails
-    return {
-      launch_date: '2026-03-10',
-      beta_active: 'true',
-      free_daily_limit: '5',
-    };
+    return { launch_date: '2026-03-10', beta_active: 'true', free_daily_limit: '5' };
   }
 }
 
-// ── Launch date helpers ──────────────────────────────────────────────────
 export async function isLaunched() {
   const config = await getRemoteConfig();
-  const launchDate = new Date(config.launch_date);
-  return new Date() >= launchDate;
+  return new Date() >= new Date(config.launch_date);
 }
 
 export async function getLaunchDate() {
@@ -78,91 +55,122 @@ export async function getDailyLimit() {
   return parseInt(config.free_daily_limit || '5', 10);
 }
 
-// ── License verification ─────────────────────────────────────────────────
-export async function verifyLicenseKey(licenseKey) {
-  if (!licenseKey || !licenseKey.startsWith('OBR-')) {
-    return { valid: false, reason: 'Invalid key format' };
+// ── Lookup user by email ─────────────────────────────────────────────────
+// Returns { found, email, licenseType, validUntil, isActive, reason? }
+export async function lookupEmail(email) {
+  if (!email || !email.includes('@')) {
+    return { found: false, reason: 'Invalid email' };
   }
-
   try {
     const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/ouroboros_licenses?license_key=eq.${encodeURIComponent(licenseKey)}&select=license_key,license_type,valid_until,is_active`,
+      `${SUPABASE_URL}/rest/v1/ouroboros_licenses?email=eq.${encodeURIComponent(email.toLowerCase().trim())}&select=email,license_type,valid_until,is_active`,
       { headers: HEADERS }
     );
-
-    if (!res.ok) throw new Error(`Verification failed: ${res.status}`);
-
+    if (!res.ok) throw new Error(`Lookup failed: ${res.status}`);
     const rows = await res.json();
-
-    if (!rows || rows.length === 0) {
-      return { valid: false, reason: 'Key not found' };
+    if (!rows || rows.length === 0) return { found: false, reason: 'Email not found' };
+    const row = rows[0];
+    if (!row.is_active) return { found: true, email: row.email, licenseType: 'none', reason: 'Account inactive' };
+    if (row.valid_until && new Date() > new Date(row.valid_until)) {
+      return { found: true, email: row.email, licenseType: 'none', reason: 'License expired' };
     }
-
-    const license = rows[0];
-
-    if (!license.is_active) {
-      return { valid: false, reason: 'Key has been deactivated' };
-    }
-
-    const validUntil = new Date(license.valid_until);
-    if (new Date() > validUntil) {
-      return { valid: false, reason: 'Key has expired', expiredAt: license.valid_until };
-    }
-
-    return {
-      valid: true,
-      licenseType: license.license_type,
-      validUntil: license.valid_until,
-    };
-
+    return { found: true, email: row.email, licenseType: row.license_type, validUntil: row.valid_until, isActive: true };
   } catch (err) {
-    console.warn('[Ouroboros] License verification failed:', err.message);
-    // On network error, fall back to cached status
-    const cached = await getCachedLicenseStatus();
-    if (cached && cached.valid) {
-      console.log('[Ouroboros] Using cached license status');
-      return cached;
-    }
-    return { valid: false, reason: 'Could not verify — check your connection' };
+    console.warn('[Ouroboros] Email lookup failed:', err.message);
+    return { found: false, reason: 'Could not verify — check your connection' };
   }
 }
 
-// ── Cache license status ─────────────────────────────────────────────────
-export async function cacheLicenseStatus(status) {
-  await chrome.storage.local.set({
-    [CACHE_KEY_LICENSE]: { ...status, cachedAt: Date.now() }
+// ── Save identity after login ─────────────────────────────────────────────
+// Writes to sync storage only — this is the single persistent source of truth
+export async function saveUserIdentity(email, licenseType) {
+  await chrome.storage.sync.set({
+    userEmail:   email,
+    licenseType: licenseType || 'free',
   });
+  console.log(`[Ouroboros] Identity saved: ${email} (${licenseType})`);
 }
 
-export async function getCachedLicenseStatus() {
-  const { licenseStatus } = await chrome.storage.local.get(CACHE_KEY_LICENSE);
-  if (!licenseStatus) return null;
-
-  const age = Date.now() - licenseStatus.cachedAt;
-  if (age > CACHE_TTL_MS) return null;
-
-  return licenseStatus;
-}
-
-// ── Full license check (cached-first) ───────────────────────────────────
-export async function checkLicense() {
-  const { licenseKey } = await chrome.storage.sync.get('licenseKey');
-
-  if (!licenseKey) {
-    return { valid: false, reason: 'No license key configured' };
+// ── Fetch usage state from Supabase ───────────────────────────────────────
+// Called at sign-in to seed the local attempt counter from the real value.
+// Returns { attemptCount, cooldownUntil } or null on failure.
+export async function fetchUsageFromSupabase(email) {
+  if (!email) return null;
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/ouroboros_usage?email=eq.${encodeURIComponent(email)}&select=attempt_count,cooldown_until`,
+      { headers: HEADERS }
+    );
+    if (!res.ok) throw new Error(`Usage fetch failed: ${res.status}`);
+    const rows = await res.json();
+    if (!rows || rows.length === 0) return { attemptCount: 0, cooldownUntil: null };
+    const row = rows[0];
+    return {
+      attemptCount:  row.attempt_count  || 0,
+      cooldownUntil: row.cooldown_until ? new Date(row.cooldown_until).getTime() : null,
+    };
+  } catch (err) {
+    console.warn('[Ouroboros] Could not fetch usage from Supabase:', err.message);
+    return null; // fall back to local state
   }
-
-  // Use cache if fresh
-  const cached = await getCachedLicenseStatus();
-  if (cached && cached.valid) return cached;
-
-  // Otherwise verify live
-  const result = await verifyLicenseKey(licenseKey);
-  await cacheLicenseStatus(result);
-  return result;
 }
 
-// ── Invalidate caches (called on reconfigure) ────────────────────────────
+// ── Write usage state to Supabase ─────────────────────────────────────────
+// Fire-and-forget — never blocks the UI.
+// Called after every accepted improvement for trial users.
+export async function pushUsageToSupabase(email, attemptCount, cooldownUntil) {
+  if (!email) return;
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/ouroboros_usage`,
+      {
+        method: 'POST',
+        headers: { ...HEADERS, 'Prefer': 'resolution=merge-duplicates' },
+        body: JSON.stringify({
+          email,
+          attempt_count:  attemptCount,
+          cooldown_until: cooldownUntil ? new Date(cooldownUntil).toISOString() : null,
+          updated_at:     new Date().toISOString(),
+        }),
+      }
+    );
+    if (!res.ok) throw new Error(`Usage push failed: ${res.status}`);
+    console.log(`[Ouroboros] Usage synced to Supabase: ${attemptCount} attempts`);
+  } catch (err) {
+    console.warn('[Ouroboros] Could not push usage to Supabase:', err.message);
+    // Non-fatal — local state is still correct
+  }
+}
+
+// ── Full wipe — called on sign-out ────────────────────────────────────────
+// Clears everything: identity, backend config, attempt counters, library.
+// User gets a completely clean slate. Supabase is unaffected.
+export async function clearAllData() {
+  await chrome.storage.sync.clear();
+  await chrome.storage.local.clear();
+  console.log('[Ouroboros] Clean slate — all local data cleared');
+}
+
+// Legacy compat — anything that called clearUserIdentity now does a full wipe
+export async function clearUserIdentity() {
+  await clearAllData();
+}
+
 export async function clearLicenseCache() {
-  await chrome.storage.local.remove([CACHE_KEY_CONFIG, CACHE_KEY_LICENSE]);
+  await chrome.storage.local.remove(CACHE_KEY_CONFIG);
+}
+
+// ── Check license — reads sync storage directly, no cache ─────────────────
+// Login wrote userEmail + licenseType to sync storage.
+// Sign-out wiped sync storage. No stale state possible.
+// valid = true only for beta/pro (unlimited, counter bypassed).
+export async function checkLicense() {
+  const stored = await chrome.storage.sync.get(['userEmail', 'licenseType']);
+  const email       = stored.userEmail   || null;
+  const licenseType = stored.licenseType || 'free';
+  return {
+    valid:       licenseType === 'beta' || licenseType === 'pro',
+    licenseType,
+    email,
+  };
 }

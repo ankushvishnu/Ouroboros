@@ -30,8 +30,8 @@ var OPENROUTER_MODELS = [
 
 var TIER_INFO = {
   beta:  { badge: '✦ Beta',  cssClass: 'beta',  desc: 'Unlimited improvements during the beta period. Thank you for being an early supporter.' },
-  trial: { badge: 'Trial',   cssClass: 'trial', desc: '5 improvements per session. A 2-hour cooldown applies when you hit the limit.' },
-  free:  { badge: 'Free',    cssClass: 'free',  desc: '5 free improvements per session with a 2-hour cooldown. Sign in on the paywall screen anytime to upgrade.' },
+  trial: { badge: 'Trial',   cssClass: 'trial', desc: '10 improvements per session. A 1.5-hour cooldown applies when you hit the limit.' },
+  free:  { badge: 'Free',    cssClass: 'free',  desc: '10 free improvements per session with a 1.5-hour cooldown. Sign in on the paywall screen anytime to upgrade.' },
 };
 
 // ── State ─────────────────────────────────────────────────────────────────
@@ -49,15 +49,26 @@ function $(id) { return document.getElementById(id); }
 
 // ── Init ──────────────────────────────────────────────────────────────────
 function init() {
+  // ?step=N lets sign-out and "Change setup" land on a specific step
+  var urlParams = new URLSearchParams(window.location.search);
+  var startStep = parseInt(urlParams.get('step') || '0', 10);
+  if (isNaN(startStep) || startStep < 0 || startStep > 3) startStep = 0;
+
   chrome.storage.sync.get(null, function(stored) {
-    if (stored.backend)    state.selectedBackend = stored.backend;
-    if (stored.userEmail)  state.userEmail = stored.userEmail;
+    if (stored.backend)     state.selectedBackend = stored.backend;
+    if (stored.userEmail)   state.userEmail = stored.userEmail;
     if (stored.licenseType) state.licenseType = stored.licenseType;
 
     renderOpenRouterModels();
     renderBackendGrid();
     attachListeners();
-    showStep(0);
+
+    // Pre-populate backend fields if jumping straight to step 1
+    if (startStep === 1 && state.selectedBackend) {
+      updateBackendFields(state.selectedBackend);
+    }
+
+    showStep(startStep);
   });
 }
 
@@ -105,7 +116,7 @@ function checkEmail() {
       state.licenseType = result.licenseType;
       state.validUntil  = result.validUntil || null;
 
-      chrome.runtime.sendMessage({ type: 'SAVE_USER', payload: { email: email, licenseType: result.licenseType, validUntil: result.validUntil } });
+      chrome.runtime.sendMessage({ type: 'SAVE_USER', payload: { email: email, licenseType: result.licenseType } });
 
       showTierCard(result.licenseType, email);
       setStatus('email-status', 'success', 'Access confirmed. Continue to set up your LLM backend.');
@@ -118,7 +129,7 @@ function checkEmail() {
       showTierCard('free', email);
       var msg = (result && result.found)
         ? "Account found but access has expired. You'll start on the free trial."
-        : "No early access found for this email. You'll start on the free trial — 5 improvements to begin.";
+        : "No early access found for this email. You'll start on the free trial — 10 improvements to begin.";
       setStatus('email-status', 'info', msg);
       btn.textContent = 'Continue →';
       btn.disabled = false;

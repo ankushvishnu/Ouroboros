@@ -1,5 +1,5 @@
 // Ouroboros — Drawer Orchestrator v2
-// 2-hour cooldown system, attempt counter, preventive copy blocking
+// 1.5-hour cooldown system, attempt counter, preventive copy blocking
 
 import { diffWords } from '../core/diff.js';
 import { getConfig, saveConfig, savePromptToLibrary, getPromptLibrary, incrementPromptUse, deletePrompt } from '../core/storage.js';
@@ -43,10 +43,21 @@ async function init() {
   window.parent.postMessage({ type: 'OUROBOROS_GET_PROMPT' }, '*');
 }
 
-// ── Cooldown countdown (updates every 30s) ────────────────────────────────
+// ── Cooldown countdown — adaptive tick rate ───────────────────────────────
+// Ticks every second when under 5 minutes, every 30 seconds otherwise.
+// Auto-unblocks the UI when cooldown expires.
+let _cooldownTimer = null;
+
 function startCooldownCountdown() {
+  // Clear any existing timer before starting a new one
+  if (_cooldownTimer) {
+    clearTimeout(_cooldownTimer);
+    _cooldownTimer = null;
+  }
+
   function update() {
     if (!state.cooldownUntil) return;
+
     const remaining = Math.max(0, state.cooldownUntil - Date.now());
     state.cooldownRemainingMs = remaining;
 
@@ -57,19 +68,24 @@ function startCooldownCountdown() {
     // Update usage meter
     renderUsageMeter();
 
-    // Cooldown just expired — auto-unblock
-    if (remaining === 0 && state.cooldownUntil) {
+    // Cooldown expired — clean up and unblock
+    if (remaining === 0) {
       state.cooldownUntil = null;
       state.attemptCount = 0;
+      _cooldownTimer = null;
       hidePaywall();
       renderUsageMeter();
       const btn = $('btn-optimize');
       if (btn && state.prompt?.trim()) btn.removeAttribute('disabled');
+      return; // stop scheduling
     }
+
+    // Adaptive tick: every 1s under 5 minutes, every 30s otherwise
+    const nextTick = remaining <= 5 * 60 * 1000 ? 1000 : 30000;
+    _cooldownTimer = setTimeout(update, nextTick);
   }
 
   update();
-  setInterval(update, 30000);
 }
 
 // ── Fetch current status from background ──────────────────────────────────
@@ -273,23 +289,46 @@ function renderResult(result) {
       : 'no changes';
   }
 
-  // Is this the last free attempt?
-  const isLastUse = state.isTrial && (state.attemptCount + 1 >= state.attemptLimit);
   const improvedText = result.improved || result.original;
+
+  // Block selection and copy for all trial users on every attempt.
+  // "Use this" is the only path to get the improved text into the prompt field.
+  // Covers: mouse selection (user-select), keyboard (copy event), right-click (contextmenu).
+  const isTrial = state.isTrial;
+
+  // Edit tab — hidden for trial users, visible for beta/pro
+  const editTabBtn = document.querySelector('.result-tab[data-result-tab="edit"]');
+  const editTabPanel = $('rv-edit');
+  if (editTabBtn)   editTabBtn.style.display   = isTrial ? 'none' : '';
+  if (editTabPanel) editTabPanel.style.display = isTrial ? 'none' : '';
+
+  // If trial user somehow has edit tab active, switch back to improved
+  if (isTrial && state.currentResultTab === 'edit') {
+    state.currentResultTab = 'improved';
+    document.querySelectorAll('.result-tab').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.result-view').forEach(v => v.classList.remove('active'));
+    document.querySelector('.result-tab[data-result-tab="improved"]')?.classList.add('active');
+    $('rv-improved')?.classList.add('active');
+  }
+  const resultArea = $('result-area');
+  if (resultArea) {
+    resultArea.removeEventListener('copy', resultArea._copyBlocker);
+    if (isTrial) {
+      resultArea._copyBlocker = (e) => e.preventDefault();
+      resultArea.addEventListener('copy', resultArea._copyBlocker);
+    } else {
+      resultArea._copyBlocker = null;
+    }
+  }
 
   // Improved view
   const improved = $('improved-text');
   if (improved) {
     improved.textContent = improvedText;
-
-    if (isLastUse) {
-      // Block copy on last use — text is non-selectable, no workaround
-      improved.style.userSelect = 'none';
-      improved.style.webkitUserSelect = 'none';
+    improved.style.userSelect = isTrial ? 'none' : '';
+    improved.style.webkitUserSelect = isTrial ? 'none' : '';
+    if (isTrial) {
       improved.addEventListener('contextmenu', (e) => e.preventDefault(), false);
-    } else {
-      improved.style.userSelect = '';
-      improved.style.webkitUserSelect = '';
     }
   }
 
@@ -303,19 +342,16 @@ function renderResult(result) {
                 : 'diff-same';
       return `<span class="${cls}">${escapeHtml(token.text)}</span>`;
     }).join('');
-    if (isLastUse) {
-      diffEl.style.userSelect = 'none';
-      diffEl.style.webkitUserSelect = 'none';
-
-    }
+    diffEl.style.userSelect = isTrial ? 'none' : '';
+    diffEl.style.webkitUserSelect = isTrial ? 'none' : '';
   }
 
-  // Edit view
+  // Edit view — only rendered for licensed users (tab hidden for trial)
   const editArea = $('edit-textarea');
   if (editArea) {
     editArea.value    = improvedText;
-    editArea.readOnly = isLastUse;
-    editArea.style.opacity = isLastUse ? '0.5' : '';
+    editArea.readOnly = false;
+    editArea.style.opacity = '';
   }
 
   // Changes list
@@ -344,12 +380,6 @@ function renderResult(result) {
   const applyBtn = $('btn-apply');
   if (applyBtn) {
     applyBtn.textContent = result.changes?.length === 0 ? '✓ Send as-is' : '✓ Use this';
-  }
-
-  // Last-use warning banner
-  const lastUseWarning = $('last-use-warning');
-  if (lastUseWarning) {
-    lastUseWarning.classList.toggle('hidden', !isLastUse);
   }
 }
 
@@ -540,22 +570,25 @@ function renderSettings() {
     </div>
     <div class="settings-note">
       Your API key and prompt content are never logged without consent.
-      <a href="https://papercargo.com/privacy.html" target="_blank">Privacy policy →</a>
+      <a href="https://papercargo.com/privacy" target="_blank">Privacy policy →</a>
     </div>
   `;
 
   $('btn-reconfig')?.addEventListener('click', () => {
-    // Open onboarding at Step 0 so user can change email/backend
-    chrome.runtime.sendMessage({ type: 'OPEN_ONBOARDING' });
+    // Always land on Step 0 so user can re-enter email first
+    chrome.runtime.sendMessage({ type: 'OPEN_ONBOARDING', payload: { step: 0 } });
   });
 
   $('btn-sign-out')?.addEventListener('click', async () => {
     if (confirm('Sign out? You\'ll revert to the free trial.')) {
       await chrome.runtime.sendMessage({ type: 'SIGN_OUT' });
-      state.licenseStatus = { valid: false, licenseType: 'none', email: null };
+      // Update local state immediately
+      state.licenseStatus = { valid: false, licenseType: 'free', email: null };
       state.isTrial = true;
       renderSettings();
       renderUsageMeter();
+      // Open onboarding at Step 0 so user can sign in with a different account
+      chrome.runtime.sendMessage({ type: 'OPEN_ONBOARDING', payload: { step: 0 } });
     }
   });
 

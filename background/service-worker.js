@@ -3,8 +3,8 @@
 
 import { route } from '../core/router.js';
 import { getConfig } from '../core/storage.js';
-import { getRemoteConfig, checkLicense, isLaunched, clearLicenseCache } from '../core/license.js';
-import { checkUsageAllowed, recordAttempt, pruneOldUsageKeys, getAttemptState } from '../core/usage.js';
+import { getRemoteConfig, checkLicense, isLaunched, clearLicenseCache, lookupEmail, saveUserIdentity, clearAllData, fetchUsageFromSupabase } from '../core/license.js';
+import { checkUsageAllowed, recordAttempt, pruneOldUsageKeys, getAttemptState, seedAttemptState } from '../core/usage.js';
 
 // ── Supabase config ─────────────────────────────────────────────────────────
 const SUPABASE_URL = 'https://igwbzpdtyuyowzgbissj.supabase.co';
@@ -61,8 +61,9 @@ async function handleMessage(message, sender) {
 
       // ── License & usage check ──────────────────────────────────────────
       const licenseStatus = await checkLicense();
+      const userEmail     = licenseStatus.email || null;
 
-      const usageCheck = await checkUsageAllowed(licenseStatus.valid);
+      const usageCheck = await checkUsageAllowed(licenseStatus.valid, userEmail);
 
       console.log('[Ouroboros] Usage check:', usageCheck);
 
@@ -81,7 +82,7 @@ async function handleMessage(message, sender) {
 
       result.isTrial      = !licenseStatus.valid;
       result.attemptCount = usageCheck.count ?? null;
-      result.attemptLimit = 5;
+      result.attemptLimit = 10;
 
       // Prompt content logging (opt-in)
       if (config.sharePromptContent && result) {
@@ -102,7 +103,7 @@ async function handleMessage(message, sender) {
       const licenseStatus = await checkLicense();
 
       if (!licenseStatus.valid) {
-        const newState = await recordAttempt();
+        const newState = await recordAttempt(licenseStatus.email || null);
         console.log(`[Ouroboros] Accept recorded. Attempts: ${newState.count}/5`);
         await logEvent({ type: 'prompt_accepted', ...message.payload });
         return { ok: true, attemptState: newState };
@@ -115,14 +116,14 @@ async function handleMessage(message, sender) {
 
     case 'GET_STATUS': {
       const licenseStatus = await checkLicense();
-      const attemptState  = await getAttemptState();
+      const attemptState  = await getAttemptState(licenseStatus.email || null);
 
       const inCooldown = attemptState.cooldownUntil && Date.now() < attemptState.cooldownUntil;
 
       return {
         licenseStatus,
         attemptState,
-        attemptLimit: 5,
+        attemptLimit: 10,
         cooldownRemainingMs: inCooldown ? attemptState.cooldownUntil - Date.now() : 0,
         isTrial: !licenseStatus.valid,
       };
@@ -130,23 +131,27 @@ async function handleMessage(message, sender) {
 
     case 'LOOKUP_EMAIL': {
       const { email } = message.payload;
-      const { lookupEmail } = await import('../core/license.js');
       return await lookupEmail(email);
     }
 
     case 'SAVE_USER': {
-      const { email, licenseType, validUntil } = message.payload;
-      const { saveUserIdentity } = await import('../core/license.js');
-      await saveUserIdentity(email, licenseType, validUntil);
-      console.log(`[Ouroboros] User saved: ${email} (${licenseType})`);
+      const { email, licenseType } = message.payload;
+      await saveUserIdentity(email, licenseType);
+
+      // Fetch real usage from Supabase and seed local counter
+      // so sign-out/sign-in doesn't reset the attempt count
+      if (licenseType !== 'beta' && licenseType !== 'pro') {
+        const supabaseUsage = await fetchUsageFromSupabase(email);
+        await seedAttemptState(email, supabaseUsage);
+        console.log(`[Ouroboros] Usage seeded from Supabase for ${email}`);
+      }
+
       return { ok: true };
     }
-
     case 'SIGN_OUT': {
-      const { clearUserIdentity, clearLicenseCache } = await import('../core/license.js');
-      await clearUserIdentity();
-      await clearLicenseCache();
-      console.log('[Ouroboros] User signed out');
+
+      await clearAllData();
+      console.log('[Ouroboros] Signed out — clean slate');
       return { ok: true };
     }
 
@@ -161,7 +166,10 @@ async function handleMessage(message, sender) {
     }
 
     case 'OPEN_ONBOARDING': {
-      chrome.tabs.create({ url: chrome.runtime.getURL('onboarding/onboarding.html') });
+      const step = message.payload?.step ?? null;
+      const base = chrome.runtime.getURL('onboarding/onboarding.html');
+      const url  = step !== null ? `${base}?step=${step}` : base;
+      chrome.tabs.create({ url });
       return { ok: true };
     }
 
