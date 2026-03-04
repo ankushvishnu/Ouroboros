@@ -3,7 +3,7 @@
 
 import { route } from '../core/router.js';
 import { getConfig } from '../core/storage.js';
-import { getRemoteConfig, checkLicense, isLaunched, clearLicenseCache, lookupEmail, saveUserIdentity, clearAllData, fetchUsageFromSupabase } from '../core/license.js';
+import { getRemoteConfig, checkLicense, isLaunched, clearLicenseCache, lookupEmail, saveUserIdentity, clearAllData, fetchUsageFromSupabase, pushUsageToSupabase } from '../core/license.js';
 import { checkUsageAllowed, recordAttempt, pruneOldUsageKeys, getAttemptState, seedAttemptState } from '../core/usage.js';
 
 // ── Supabase config ─────────────────────────────────────────────────────────
@@ -103,8 +103,15 @@ async function handleMessage(message, sender) {
       const licenseStatus = await checkLicense();
 
       if (!licenseStatus.valid) {
-        const newState = await recordAttempt(licenseStatus.email || null);
-        console.log(`[Ouroboros] Accept recorded. Attempts: ${newState.count}/5`);
+        const userEmail = licenseStatus.email || null;
+        const newState  = await recordAttempt(userEmail);
+        console.log(`[Ouroboros] Accept recorded. Attempts: ${newState.count}/10`);
+
+        // Push to Supabase — fire and forget, non-blocking
+        if (userEmail) {
+          pushUsageToSupabase(userEmail, newState.count, newState.cooldownUntil);
+        }
+
         await logEvent({ type: 'prompt_accepted', ...message.payload });
         return { ok: true, attemptState: newState };
       }

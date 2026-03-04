@@ -122,10 +122,10 @@ export async function pushUsageToSupabase(email, attemptCount, cooldownUntil) {
   if (!email) return;
   try {
     const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/ouroboros_usage`,
+      `${SUPABASE_URL}/rest/v1/ouroboros_usage?on_conflict=email`,
       {
         method: 'POST',
-        headers: { ...HEADERS, 'Prefer': 'resolution=merge-duplicates' },
+        headers: { ...HEADERS, 'Prefer': 'resolution=merge-duplicates,return=minimal' },
         body: JSON.stringify({
           email,
           attempt_count:  attemptCount,
@@ -134,7 +134,10 @@ export async function pushUsageToSupabase(email, attemptCount, cooldownUntil) {
         }),
       }
     );
-    if (!res.ok) throw new Error(`Usage push failed: ${res.status}`);
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new Error(`Usage push failed (${res.status}): ${errText}`);
+    }
     console.log(`[Ouroboros] Usage synced to Supabase: ${attemptCount} attempts`);
   } catch (err) {
     console.warn('[Ouroboros] Could not push usage to Supabase:', err.message);

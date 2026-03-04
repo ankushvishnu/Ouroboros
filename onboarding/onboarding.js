@@ -110,9 +110,9 @@ function checkEmail() {
       return;
     }
 
-    state.userEmail = email;
-
     if (result && result.found && result.licenseType && result.licenseType !== 'none') {
+      // Email found in DB — save identity, proceed with confirmed tier
+      state.userEmail   = email;
       state.licenseType = result.licenseType;
       state.validUntil  = result.validUntil || null;
 
@@ -125,15 +125,15 @@ function checkEmail() {
       btn.onclick = function() { showStep(1); };
 
     } else {
-      state.licenseType = 'free';
-      showTierCard('free', email);
+      // Email not in DB — do not save identity, user proceeds as anonymous trial
+      // state.userEmail and state.licenseType deliberately left unset
       var msg = (result && result.found)
-        ? "Account found but access has expired. You'll start on the free trial."
-        : "No early access found for this email. You'll start on the free trial — 10 improvements to begin.";
-      setStatus('email-status', 'info', msg);
-      btn.textContent = 'Continue →';
+        ? 'Account found but access has expired. Please contact us to renew, or skip to use the free trial.'
+        : 'No login ID detected. Please check your email or skip to use the free trial (10 improvements per session).';
+      setStatus('email-status', 'warning', msg);
+      btn.textContent = 'Try another email';
       btn.disabled = false;
-      btn.onclick = function() { showStep(1); };
+      btn.onclick = null; // stay on this step
     }
   });
 }
@@ -283,8 +283,7 @@ function buildConfig() {
     azureDeployment: null,
     azureApiVersion: '2024-02-01',
     openrouterModel: null,
-    userEmail: state.userEmail,
-    licenseType: state.licenseType,
+    // userEmail and licenseType are managed by SAVE_USER — not part of backend config
   };
   if (id === 'ollama')     return Object.assign({}, base, { ollamaEndpoint: ($('ollama-endpoint')||{}).value||'http://localhost:11434', ollamaModel: ($('ollama-model')||{}).value||'llama3.2' });
   if (id === 'azure')      return Object.assign({}, base, { apiKey: ($('api-key-input')||{}).value||'', azureEndpoint: ($('azure-endpoint')||{}).value||'', azureDeployment: ($('azure-deployment')||{}).value||'' });
@@ -305,8 +304,8 @@ function finishSetup() {
     configured: true,
     shareAnonymousData: state.shareData,
     onboardingComplete: true,
-    userEmail: state.userEmail,
-    licenseType: state.licenseType,
+    // userEmail and licenseType are written by SAVE_USER at login time.
+    // Writing them here again would cause a double-save. Leave them alone.
   }, function() {
     showStep(3);
   });

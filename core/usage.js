@@ -4,7 +4,6 @@
 // Supabase is the persistent store — local is the working copy
 // Anonymous users: local only, no Supabase
 
-import { pushUsageToSupabase } from './license.js';
 
 const ATTEMPT_LIMIT = 10;
 const COOLDOWN_MS   = 1.5 * 60 * 60 * 1000; // 1.5 hours
@@ -41,7 +40,7 @@ export async function getAttemptState(email) {
     const fresh = { count: 0, cooldownUntil: null };
     await chrome.storage.local.set({ [key]: fresh });
     // Reset Supabase row too — fire and forget
-    if (email) pushUsageToSupabase(email, 0, null);
+    // Supabase reset on cooldown expiry is handled by service-worker
     return fresh;
   }
 
@@ -70,9 +69,6 @@ export async function recordAttempt(email) {
 
   const newState = { count: newCount, cooldownUntil };
   await chrome.storage.local.set({ [key]: newState });
-
-  // Push to Supabase — fire and forget, non-blocking
-  if (email) pushUsageToSupabase(email, newCount, cooldownUntil);
 
   console.log(`[Ouroboros] ${email || 'anon'} — attempt ${newCount}/${ATTEMPT_LIMIT}`, cooldownUntil ? '— cooldown started' : '');
   return { ...newState, justTriggeredCooldown };
