@@ -10,6 +10,36 @@
   let drawerOpen = false;
   let currentTextarea = null;
 
+  // ── Live sync — debounced input listener while drawer is open ─────────────
+  let _syncDebounce = null;
+
+  function sendContextToDrawer() {
+    const prompt     = window.__ouroborosInterceptor?.getActivePrompt() || '';
+    const provenance = window.__ouroborosInterceptor?.getProvenance()   || 'typed';
+    const platform   = window.__ouroborosInterceptor?.getPlatform()     || 'generic';
+    drawerFrame?.contentWindow?.postMessage({
+      type: 'OUROBOROS_CONTEXT',
+      payload: { prompt, provenance, platform }
+    }, '*');
+  }
+
+  function onTextareaInput() {
+    if (!drawerOpen) return;
+    clearTimeout(_syncDebounce);
+    _syncDebounce = setTimeout(sendContextToDrawer, 200);
+  }
+
+  function attachLiveSync(el) {
+    if (!el) return;
+    el.addEventListener('input', onTextareaInput, true);
+  }
+
+  function detachLiveSync(el) {
+    if (!el) return;
+    el.removeEventListener('input', onTextareaInput, true);
+    clearTimeout(_syncDebounce);
+  }
+
   // ── Create the trigger button ─────────────────────────────────────────────
   function createTrigger() {
     const btn = document.createElement('button');
@@ -61,18 +91,17 @@
       root.classList.add('ouroboros-drawer-open');
       triggerButton?.classList.add('ouroboros-trigger-active');
 
-      // Send current prompt to drawer
-      const prompt = window.__ouroborosInterceptor?.getActivePrompt() || '';
-      const provenance = window.__ouroborosInterceptor?.getProvenance() || 'typed';
-      const platform = window.__ouroborosInterceptor?.getPlatform() || 'generic';
+      // Send current prompt immediately on open
+      sendContextToDrawer();
 
-      drawerFrame?.contentWindow?.postMessage({
-        type: 'OUROBOROS_CONTEXT',
-        payload: { prompt, provenance, platform }
-      }, '*');
+      // Start live sync — updates drawer preview as user types
+      attachLiveSync(currentTextarea);
     } else {
       root.classList.remove('ouroboros-drawer-open');
       triggerButton?.classList.remove('ouroboros-trigger-active');
+
+      // Stop live sync on close
+      detachLiveSync(currentTextarea);
     }
   }
 
@@ -113,13 +142,7 @@
       }
 
       case 'OUROBOROS_GET_PROMPT': {
-        const prompt = window.__ouroborosInterceptor?.getActivePrompt() || '';
-        const provenance = window.__ouroborosInterceptor?.getProvenance() || 'typed';
-        const platform = window.__ouroborosInterceptor?.getPlatform() || 'generic';
-        drawerFrame?.contentWindow?.postMessage({
-          type: 'OUROBOROS_CONTEXT',
-          payload: { prompt, provenance, platform }
-        }, '*');
+        sendContextToDrawer();
         break;
       }
     }
@@ -127,6 +150,7 @@
 
   // ── Watch for textarea focus to show trigger ──────────────────────────────
   window.addEventListener('ouroboros:textarea-focused', (e) => {
+    const prevTextarea = currentTextarea;
     currentTextarea = e.detail.el;
 
     if (!triggerButton) {
@@ -135,6 +159,14 @@
     }
 
     positionTrigger(currentTextarea);
+
+    // If drawer is open and focus moved to a different textarea,
+    // re-attach live sync to the new element and send fresh context
+    if (drawerOpen && currentTextarea !== prevTextarea) {
+      detachLiveSync(prevTextarea);
+      attachLiveSync(currentTextarea);
+      sendContextToDrawer();
+    }
   });
 
   // Reposition on scroll/resize
