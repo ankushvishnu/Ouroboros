@@ -53,6 +53,55 @@
     .status-box.info    { background: rgba(180,255,100,0.06);  border: 1px solid rgba(180,255,100,0.15); color: var(--color-text-muted); display: block; }
     .status-box.warning { background: rgba(250,204,21,0.08);   border: 1px solid rgba(250,204,21,0.2);   color: var(--color-warning); display: block; }
 
+    /* Ollama setup instructions */
+    .ollama-setup-note {
+      margin-top: 12px;
+      padding: 14px 16px;
+      background: rgba(250,204,21,0.05);
+      border: 1px solid rgba(250,204,21,0.2);
+      border-radius: var(--radius-md);
+      font-size: var(--text-xs);
+      line-height: 1.7;
+      color: var(--color-text-muted);
+    }
+    .setup-note-title {
+      font-size: var(--text-sm);
+      font-weight: 600;
+      color: var(--color-warning);
+      margin-bottom: 6px;
+    }
+    .setup-note-os {
+      margin: 10px 0 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .os-label {
+      font-size: var(--text-xs);
+      color: var(--color-text-dim);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .ollama-setup-note code {
+      display: block;
+      background: var(--color-bg-elevated);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-sm);
+      padding: 6px 10px;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--color-accent);
+      word-break: break-all;
+    }
+    .setup-note-permanent {
+      margin-top: 10px;
+      font-size: var(--text-xs);
+      color: var(--color-text-dim);
+    }
+    .setup-note-permanent strong {
+      color: var(--color-text-muted);
+    }
+
     .tier-card { padding: 14px 16px; border-radius: var(--radius-md); margin-bottom: 20px; display: none; }
     .tier-card.beta    { background: rgba(180,255,100,0.06); border: 1px solid rgba(180,255,100,0.2); }
     .tier-card.trial   { background: rgba(250,204,21,0.06);  border: 1px solid rgba(250,204,21,0.2);  }
@@ -180,6 +229,23 @@
           <label class="field-label" for="ollama-model">Model</label>
           <input type="text" class="field-input" id="ollama-model" placeholder="llama3.2">
           <div class="field-help" id="ollama-models-hint"></div>
+        </div>
+        <!-- Required: allow browser extension origin -->
+        <div class="ollama-setup-note">
+          <div class="setup-note-title">⚠ One-time setup required</div>
+          <p>Ollama blocks browser extension requests by default. Add this to your system environment variables once and you're done.</p>
+
+          <div class="setup-note-os">
+            <span class="os-label">Windows — add to System Environment Variables</span>
+            <code>Variable name: OLLAMA_ORIGINS</code>
+            <code>Variable value: chrome-extension://*,extension://*</code>
+          </div>
+          <p class="setup-note-permanent">Search <strong>Edit the system environment variables</strong> → Environment Variables → New → paste the values above → OK. Then restart Ollama.</p>
+
+          <div class="setup-note-os" style="margin-top:12px">
+            <span class="os-label">Mac / Linux — add to ~/.zshrc or ~/.bashrc</span>
+            <code>export OLLAMA_ORIGINS="chrome-extension://*,extension://*"</code>
+          </div>
         </div>
       </div>
 
